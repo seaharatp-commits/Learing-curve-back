@@ -1,0 +1,119 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+}
+
+enum IssuePriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum IssueStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  chatSessions    ChatSession[]
+  issues          IssueReport[]
+  knowledgeBaseArticles KnowledgeBaseArticle[] @relation("KbAuthor")
+
+  @@map("users")
+}
+
+model Category {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  issues               IssueReport[]
+  knowledgeBaseArticles KnowledgeBaseArticle[]
+
+  @@map("categories")
+}
+
+model ChatSession {
+  id        String   @id @default(uuid())
+  userId    String
+  title     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+
+  @@index([userId])
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id        String      @id @default(uuid())
+  sessionId String
+  role      MessageRole
+  content   String
+  createdAt DateTime    @default(now())
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+  @@map("chat_messages")
+}
+
+model IssueReport {
+  id          String        @id @default(uuid())
+  title       String
+  description String
+  categoryId  String
+  priority    IssuePriority @default(MEDIUM)
+  status      IssueStatus   @default(OPEN)
+  reporterId  String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  category Category @relation(fields: [categoryId], references: [id])
+  reporter User     @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([categoryId])
+  @@map("issue_reports")
+}
+
+model KnowledgeBaseArticle {
+  id         String   @id @default(uuid())
+  title      String
+  content    String
+  categoryId String
+  authorId   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  category Category @relation(fields: [categoryId], references: [id])
+  author   User?    @relation("KbAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([categoryId])
+  @@map("knowledge_base_articles")
+}

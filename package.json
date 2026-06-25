@@ -1,0 +1,22 @@
+{
+  "name": "learning-curve-back",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio",
+    "prisma:seed": "ts-node prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "6.1.0"
+  },
+  "devDependencies": {
+    "prisma": "6.1.0",
+    "ts-node": "10.9.2",
+    "typescript": "5.7.2",
+    "bcrypt": "5.1.1",
+    "@types/bcrypt": "5.0.2",
+    "@types/node": "22.10.2"
+  }
+}
