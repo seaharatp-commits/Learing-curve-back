@@ -3,10 +3,12 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import type { AiChatMessage } from "../ai/ai.types";
 import { SendMessageDto } from "./dto/send-message.dto";
+import { sanitizeReply } from "./sanitize-reply.util";
 
 const SYSTEM_PROMPT =
   "คุณคือผู้ช่วย AI สำหรับระบบ Learning Curve ที่ช่วยตอบและแนะนำวิธีแก้ไขปัญหาให้ผู้ใช้งาน " +
-  "ตอบเป็นภาษาไทย สั้น กระชับ และนำไปปฏิบัติได้จริง";
+  "ตอบเป็นภาษาไทย สั้น กระชับ และนำไปปฏิบัติได้จริง " +
+  "ตอบเป็นข้อความล้วน ห้ามใช้ markdown หรือสัญลักษณ์จัดรูปแบบใด ๆ เช่น **, __, #, `, - นำหน้าหัวข้อ";
 
 @Injectable()
 export class ChatService {
@@ -55,7 +57,8 @@ export class ChatService {
     ];
 
     try {
-      return await this.aiService.chat(messages);
+      const reply = await this.aiService.chat(messages);
+      return sanitizeReply(reply);
     } catch (error) {
       this.logger.error(`AI Develyst call failed, falling back to canned reply: ${error}`);
       return this.fallbackReply(content, knowledge);
