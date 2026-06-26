@@ -154,7 +154,9 @@ first.
 
 - `bcrypt`/`@types/bcrypt` pinned to specific versions — don't bump without checking
   native binary compatibility on Windows.
-- No automated tests yet; everything so far has been verified manually via curl/Node
-  one-liners against a live Postgres + the live AI Develyst gateway.
+- Unit tests exist for the highest-risk pure logic: `text-similarity.util.spec.ts`,
+  `recommendation.service.spec.ts`, `knowledge-learning.service.spec.ts` (`npm test`,
+  Prisma/AiService mocked — no live DB needed). Controllers/guards/other services still
+  only verified manually via curl/Node one-liners against a live Postgres + AI Develyst.
 - `RolesGuard` throws a Thai-language `ForbiddenException` message — keep error messages
   in Thai for consistency with the rest of the app (it's user-facing in the frontend).
