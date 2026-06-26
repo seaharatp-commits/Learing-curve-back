@@ -28,7 +28,7 @@ async function main() {
     },
   });
 
-  await prisma.user.upsert({
+  const user = await prisma.user.upsert({
     where: { email: "user@learningcurve.dev" },
     update: {},
     create: {
@@ -55,6 +55,55 @@ async function main() {
       },
     ],
   });
+
+  // Lessons/quizzes are seeded once (no natural unique key to upsert on).
+  const existingLessonCount = await prisma.lesson.count();
+  if (existingLessonCount === 0) {
+    const lessonTitles = [
+      "พื้นฐานการใช้งานระบบ",
+      "การจัดการบัญชีผู้ใช้",
+      "การแก้ไขปัญหาเบื้องต้น",
+      "การใช้งานฐานความรู้",
+      "เทคนิคขั้นสูง",
+    ];
+
+    const lessons = [];
+    for (let i = 0; i < lessonTitles.length; i++) {
+      const lesson = await prisma.lesson.create({
+        data: {
+          title: lessonTitles[i],
+          order: i + 1,
+          quizzes: { create: { title: `แบบทดสอบ: ${lessonTitles[i]}` } },
+        },
+        include: { quizzes: true },
+      });
+      lessons.push(lesson);
+    }
+
+    // Demo progress/quiz history for the regular user account: first two
+    // lessons completed with passing quiz scores, third lesson not yet
+    // attempted -> shows up as "Continue Learning".
+    const completedLessons = lessons.slice(0, 2);
+    for (const lesson of completedLessons) {
+      await prisma.lessonProgress.create({
+        data: { userId: user.id, lessonId: lesson.id, completed: true, completedAt: new Date() },
+      });
+    }
+
+    const scores = [78, 85, 92, 88];
+    const daysAgo = [10, 7, 3, 1];
+    for (let i = 0; i < scores.length; i++) {
+      const lesson = lessons[i % completedLessons.length];
+      await prisma.quizAttempt.create({
+        data: {
+          userId: user.id,
+          quizId: lesson.quizzes[0].id,
+          score: scores[i],
+          completedAt: new Date(Date.now() - daysAgo[i] * 24 * 60 * 60 * 1000),
+        },
+      });
+    }
+  }
 }
 
 main()

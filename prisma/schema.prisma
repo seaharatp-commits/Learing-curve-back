@@ -41,6 +41,8 @@ model User {
   chatSessions    ChatSession[]
   issues          IssueReport[]
   knowledgeBaseArticles KnowledgeBaseArticle[] @relation("KbAuthor")
+  quizAttempts    QuizAttempt[]
+  lessonProgress  LessonProgress[]
 
   @@map("users")
 }
@@ -135,4 +137,57 @@ model KnowledgeBaseArticle {
 
   @@index([categoryId])
   @@map("knowledge_base_articles")
+}
+
+model Lesson {
+  id        String   @id @default(uuid())
+  title     String
+  order     Int
+  createdAt DateTime @default(now())
+
+  quizzes  Quiz[]
+  progress LessonProgress[]
+
+  @@map("lessons")
+}
+
+model Quiz {
+  id        String   @id @default(uuid())
+  lessonId  String
+  title     String
+  createdAt DateTime @default(now())
+
+  lesson   Lesson        @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  attempts QuizAttempt[]
+
+  @@index([lessonId])
+  @@map("quizzes")
+}
+
+model QuizAttempt {
+  id          String   @id @default(uuid())
+  userId      String
+  quizId      String
+  score       Int
+  completedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quiz Quiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
+
+  @@index([userId, completedAt])
+  @@map("quiz_attempts")
+}
+
+model LessonProgress {
+  id          String    @id @default(uuid())
+  userId      String
+  lessonId    String
+  completed   Boolean   @default(false)
+  completedAt DateTime?
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lessonId])
+  @@map("lesson_progress")
 }
