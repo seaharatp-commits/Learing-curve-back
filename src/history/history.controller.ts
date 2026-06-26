@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from "@nestjs/common";
+import { Controller, Delete, Get, Param, UseGuards } from "@nestjs/common";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import type { RequestUser } from "../auth/strategies/jwt.strategy";
@@ -12,5 +12,10 @@ export class HistoryController {
   @Get()
   list(@CurrentUser() user: RequestUser) {
     return this.historyService.list(user.id);
+  }
+
+  @Delete(":sessionId")
+  remove(@CurrentUser() user: RequestUser, @Param("sessionId") sessionId: string) {
+    return this.historyService.remove(user.id, sessionId);
   }
 }
