@@ -7,7 +7,10 @@ import type { RequestUser } from "../auth/strategies/jwt.strategy";
 import { KnowledgeBaseService } from "./knowledge-base.service";
 import { KnowledgeBaseDto } from "./dto/knowledge-base.dto";
 import { RecommendQueryDto } from "./dto/recommend-query.dto";
+import { GenerateKnowledgeDto } from "./dto/generate-knowledge.dto";
+import { ConfirmKnowledgeDto } from "./dto/confirm-knowledge.dto";
 import { RecommendationService } from "./recommendation.service";
+import { KnowledgeLearningService } from "./knowledge-learning.service";
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller("knowledge-base")
@@ -15,6 +18,7 @@ export class KnowledgeBaseController {
   constructor(
     private readonly knowledgeBaseService: KnowledgeBaseService,
     private readonly recommendationService: RecommendationService,
+    private readonly knowledgeLearningService: KnowledgeLearningService,
   ) {}
 
   @Get()
@@ -25,6 +29,18 @@ export class KnowledgeBaseController {
   @Post("recommend")
   recommend(@Body() dto: RecommendQueryDto) {
     return this.recommendationService.recommend(dto);
+  }
+
+  @Roles("ADMIN")
+  @Post("generate")
+  generate(@Body() dto: GenerateKnowledgeDto) {
+    return this.knowledgeLearningService.generateDraft(dto.text);
+  }
+
+  @Roles("ADMIN")
+  @Post("confirm")
+  confirm(@CurrentUser() user: RequestUser, @Body() dto: ConfirmKnowledgeDto) {
+    return this.knowledgeLearningService.confirmKnowledge(dto, user.id);
   }
 
   @Roles("ADMIN")

@@ -125,6 +125,10 @@ model KnowledgeBaseArticle {
   keywords     String[] @default([])
   tags         String[] @default([])
 
+  // Verbatim text the contributor originally wrote, before AI restructuring.
+  // Preserved for provenance/audit — never overwritten, only appended to on merge.
+  originalText String?
+
   category     Category      @relation(fields: [categoryId], references: [id])
   author       User?         @relation("KbAuthor", fields: [authorId], references: [id], onDelete: SetNull)
   sourceIssues IssueReport[]

@@ -2,8 +2,10 @@ import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import { CategoriesService } from "../common/categories.service";
+import { RecommendationService } from "./recommendation.service";
 import type { AiChatMessage } from "../ai/ai.types";
 import type { ArticleDraft, ArticleFields } from "./article-draft.types";
+import type { ConfirmKnowledgeDto } from "./dto/confirm-knowledge.dto";
 import { buildFingerprint, sharedTokens } from "./text-similarity.util";
 import type { IssueReport, KnowledgeBaseArticle } from "@prisma/client";
 
@@ -22,6 +24,7 @@ export class KnowledgeLearningService {
     private readonly prisma: PrismaService,
     private readonly aiService: AiService,
     private readonly categoriesService: CategoriesService,
+    private readonly recommendationService: RecommendationService,
   ) {}
 
   private buildExtractionMessages(
@@ -37,6 +40,13 @@ export class KnowledgeLearningService {
     return [
       { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
       { role: "user", content: ticketText },
+    ];
+  }
+
+  private buildExtractionMessagesFromText(text: string): AiChatMessage[] {
+    return [
+      { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
+      { role: "user", content: text },
     ];
   }
 
@@ -70,6 +80,11 @@ export class KnowledgeLearningService {
     issue: IssueReport & { category: { name: string } },
   ): Promise<ArticleDraft> {
     const reply = await this.aiService.chat(this.buildExtractionMessages(issue));
+    return this.parseDraft(reply);
+  }
+
+  private async extractDraftFromText(text: string): Promise<ArticleDraft> {
+    const reply = await this.aiService.chat(this.buildExtractionMessagesFromText(text));
     return this.parseDraft(reply);
   }
 
@@ -216,5 +231,93 @@ export class KnowledgeLearningService {
     });
 
     return { action, article };
+  }
+
+  // Step 1 of the "Add Knowledge" flow: turn free-form text into a structured
+  // draft for review, plus the existing articles it might duplicate. Nothing
+  // is persisted here — the user reviews/edits in the UI and calls
+  // confirmKnowledge() to actually save.
+  async generateDraft(text: string) {
+    const draft = await this.extractDraftFromText(text);
+    const similarArticles = await this.recommendationService.recommend({
+      title: draft.title,
+      description: `${draft.summary} ${draft.symptoms}`,
+      category: draft.category,
+    });
+
+    return { draft, originalText: text, similarArticles };
+  }
+
+  // Step 2: persist the (possibly user-edited) draft. If targetArticleId is
+  // set, the user chose to update an existing article instead of creating a
+  // duplicate — original text from both contributions is preserved.
+  async confirmKnowledge(dto: ConfirmKnowledgeDto, authorId: string) {
+    const category = await this.categoriesService.resolveByName(dto.category);
+    const fields: ArticleFields = {
+      title: dto.title,
+      summary: dto.summary,
+      symptoms: dto.symptoms,
+      environment: dto.environment,
+      rootCause: dto.rootCause,
+      resolution: dto.resolution,
+      verification: dto.verification,
+      keywords: dto.keywords,
+      tags: dto.tags,
+      category: dto.category,
+    };
+    const content = this.renderContent(fields);
+
+    if (dto.targetArticleId) {
+      const existing = await this.prisma.knowledgeBaseArticle.findUnique({
+        where: { id: dto.targetArticleId },
+      });
+      if (!existing) throw new NotFoundException("ไม่พบบทความที่จะอัปเดต");
+
+      const mergedKeywords = Array.from(new Set([...existing.keywords, ...dto.keywords]));
+      const mergedTags = Array.from(new Set([...existing.tags, ...dto.tags]));
+      const mergedOriginalText = existing.originalText
+        ? `${existing.originalText}\n---\n${dto.originalText}`
+        : dto.originalText;
+
+      const article = await this.prisma.knowledgeBaseArticle.update({
+        where: { id: dto.targetArticleId },
+        data: {
+          title: dto.title,
+          content,
+          categoryId: category.id,
+          summary: dto.summary,
+          symptoms: dto.symptoms,
+          environment: dto.environment,
+          rootCause: dto.rootCause,
+          resolution: dto.resolution,
+          verification: dto.verification,
+          keywords: mergedKeywords,
+          tags: mergedTags,
+          originalText: mergedOriginalText,
+        },
+      });
+      this.logger.log(`Updated KB article ${article.id} from contributed knowledge`);
+      return { action: "updated" as const, article };
+    }
+
+    const article = await this.prisma.knowledgeBaseArticle.create({
+      data: {
+        title: dto.title,
+        content,
+        categoryId: category.id,
+        authorId,
+        summary: dto.summary,
+        symptoms: dto.symptoms,
+        environment: dto.environment,
+        rootCause: dto.rootCause,
+        resolution: dto.resolution,
+        verification: dto.verification,
+        keywords: dto.keywords,
+        tags: dto.tags,
+        originalText: dto.originalText,
+      },
+    });
+    this.logger.log(`Created KB article ${article.id} from contributed knowledge`);
+    return { action: "created" as const, article };
   }
 }
