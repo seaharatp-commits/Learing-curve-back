@@ -122,7 +122,7 @@ export class KnowledgeLearningService {
     return [
       fields.summary && fields.summary !== "ไม่ระบุ" ? fields.summary : null,
       section("อาการที่พบ", fields.symptoms),
-      section("สภาพแวดล้อม", fields.environment),
+      // section("สภาพแวดล้อม", fields.environment),
       section("สาเหตุที่เป็นไปได้", fields.rootCause),
       section("วิธีแก้ไข", fields.resolution),
       section("การตรวจสอบผลลัพธ์", fields.verification),
