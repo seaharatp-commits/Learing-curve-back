@@ -94,8 +94,11 @@ model IssueReport {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
-  category Category @relation(fields: [categoryId], references: [id])
-  reporter User     @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  knowledgeBaseArticleId String?
+
+  category             Category              @relation(fields: [categoryId], references: [id])
+  reporter             User                  @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  knowledgeBaseArticle KnowledgeBaseArticle? @relation(fields: [knowledgeBaseArticleId], references: [id], onDelete: SetNull)
 
   @@index([status])
   @@index([categoryId])
@@ -111,8 +114,20 @@ model KnowledgeBaseArticle {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  category Category @relation(fields: [categoryId], references: [id])
-  author   User?    @relation("KbAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  // Structured fields populated by the AI ticket->KB learning pipeline.
+  // Null/empty for articles created by hand through the admin UI.
+  summary      String?
+  symptoms     String?
+  environment  String?
+  rootCause    String?
+  resolution   String?
+  verification String?
+  keywords     String[] @default([])
+  tags         String[] @default([])
+
+  category     Category      @relation(fields: [categoryId], references: [id])
+  author       User?         @relation("KbAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  sourceIssues IssueReport[]
 
   @@index([categoryId])
   @@map("knowledge_base_articles")
