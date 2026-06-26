@@ -66,6 +66,34 @@ contract). That gateway fronts OpenAI/Gemini/xAI/DeepSeek behind one API.
   `https://ai.develyst.online`; there's also a `local.bru` pointing at `localhost:3009`
   if a local instance of the gateway is ever run).
 
+### Issue → Knowledge Base learning pipeline (`src/knowledge-base/knowledge-learning.service.ts`)
+
+`POST /api/issues/:id/learn` (ADMIN) turns a resolved-in-spirit support ticket into a
+standardized KB article, automatically:
+
+1. Sends the issue (title/description/category/priority) to the AI gateway with a prompt
+   that demands strict JSON back — `{ title, summary, symptoms, environment, rootCause,
+   resolution, verification, keywords[], tags[], category }` — and explicitly forbids
+   inventing technical details not present in the original report (unknown fields come
+   back as `"ไม่ระบุ"`, never fabricated).
+2. Searches existing KB articles for a match using **token-level overlap**, not exact
+   keyword string equality — the AI phrases the same finding differently every call
+   (`"Windows 11"` vs `"Windows"`, `"0x80070005"` vs `"error 0x80070005"`), so keywords/
+   title/symptoms are tokenized into individual words and compared as sets
+   (`buildFingerprint`). Match requires 2+ shared tokens, or 1+ if the category also matches.
+3. On a match: merges the new findings into the existing article's fields (appends
+   genuinely new info, skips anything that's already a substring of the existing text)
+   and regenerates `content`. No match: creates a new article.
+4. Either way, marks the source `IssueReport.status = RESOLVED` and links it via
+   `knowledgeBaseArticleId` (many issues can point at the same article over time).
+
+**Known limitation:** merging is naive text concatenation with `(เพิ่มเติม)` prefixes, not
+AI-summarized — after many merges into the same article, `content` will get long and
+repetitive. Fine for now; revisit if any article accumulates a lot of merges.
+
+There's currently no frontend trigger for this endpoint — call it directly, or build an
+admin UI button (e.g. on the dashboard's per-issue drill-down) if needed.
+
 ### Database (Prisma)
 
 Six tables — see `prisma/schema.prisma`:
@@ -73,12 +101,18 @@ Six tables — see `prisma/schema.prisma`:
 ```
 User 1---* ChatSession 1---* ChatMessage
 User 1---* IssueReport *---1 Category
+User 1---* IssueReport *---1 KnowledgeBaseArticle   (optional, set by the learning pipeline)
 User 1---* KnowledgeBaseArticle *---1 Category
 ```
 
 `categories` is a shared lookup table — both `issue_reports` and `knowledge_base_articles`
 reference it by name (resolved/created on the fly via `CategoriesService.resolveByName`),
 rather than storing free-text category strings.
+
+`KnowledgeBaseArticle.summary/symptoms/environment/rootCause/resolution/verification/
+keywords/tags` are all nullable/empty-default — articles created by hand through the admin
+UI (`KnowledgeBaseService`, not `KnowledgeLearningService`) never populate them; `content`
+remains the single source of truth for what the frontend displays either way.
 
 ## Local setup
 
@@ -111,6 +145,7 @@ first.
 | GET | `/api/history` | auth | current user's sessions, with `lastMessage`/`messageCount` |
 | POST | `/api/issues` | auth | `{ title, description, category, priority }` |
 | GET | `/api/issues` | ADMIN | all issues, newest first |
+| POST | `/api/issues/:id/learn` | ADMIN | runs the AI extraction → dedup/merge → KB pipeline, marks issue RESOLVED |
 | GET | `/api/knowledge-base` | auth | |
 | POST/PUT/DELETE | `/api/knowledge-base[/:id]` | ADMIN | |
 | GET | `/api/dashboard` | ADMIN | totals + issues grouped by category |
