@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { CategoriesService } from "../common/categories.service";
 import { CreateIssueDto } from "./dto/create-issue.dto";
@@ -41,5 +41,14 @@ export class IssuesService {
       reporterEmail: issue.reporter.email,
       createdAt: issue.createdAt,
     }));
+  }
+
+  async findOne(id: string) {
+    const issue = await this.prisma.issueReport.findUnique({
+      where: { id },
+      include: { category: true },
+    });
+    if (!issue) throw new NotFoundException("ไม่พบปัญหานี้");
+    return issue;
   }
 }

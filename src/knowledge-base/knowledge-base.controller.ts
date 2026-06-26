@@ -6,15 +6,25 @@ import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import type { RequestUser } from "../auth/strategies/jwt.strategy";
 import { KnowledgeBaseService } from "./knowledge-base.service";
 import { KnowledgeBaseDto } from "./dto/knowledge-base.dto";
+import { RecommendQueryDto } from "./dto/recommend-query.dto";
+import { RecommendationService } from "./recommendation.service";
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller("knowledge-base")
 export class KnowledgeBaseController {
-  constructor(private readonly knowledgeBaseService: KnowledgeBaseService) {}
+  constructor(
+    private readonly knowledgeBaseService: KnowledgeBaseService,
+    private readonly recommendationService: RecommendationService,
+  ) {}
 
   @Get()
   list() {
     return this.knowledgeBaseService.list();
+  }
+
+  @Post("recommend")
+  recommend(@Body() dto: RecommendQueryDto) {
+    return this.recommendationService.recommend(dto);
   }
 
   @Roles("ADMIN")

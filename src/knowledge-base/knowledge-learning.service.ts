@@ -4,6 +4,7 @@ import { AiService } from "../ai/ai.service";
 import { CategoriesService } from "../common/categories.service";
 import type { AiChatMessage } from "../ai/ai.types";
 import type { ArticleDraft, ArticleFields } from "./article-draft.types";
+import { buildFingerprint, sharedTokens } from "./text-similarity.util";
 import type { IssueReport, KnowledgeBaseArticle } from "@prisma/client";
 
 const EXTRACTION_SYSTEM_PROMPT =
@@ -72,18 +73,8 @@ export class KnowledgeLearningService {
     return this.parseDraft(reply);
   }
 
-  // Tokenizes keywords/title/symptoms into individual words so that e.g.
-  // "Windows 11" and "Windows" or "0x80070005" and "error 0x80070005"
-  // still overlap — AI-generated keyword phrasing varies between calls,
-  // so comparing whole keyword strings is too brittle.
-  private buildFingerprint(keywords: string[], title: string, symptoms: string): Set<string> {
-    const text = [...keywords, title, symptoms].join(" ").toLowerCase();
-    const tokens = text.match(/[a-z0-9ก-๙]+/g) ?? [];
-    return new Set(tokens.filter((token) => token.length >= 3));
-  }
-
   private async findSimilarArticle(draft: ArticleDraft): Promise<KnowledgeBaseArticle | null> {
-    const draftFingerprint = this.buildFingerprint(draft.keywords, draft.title, draft.symptoms);
+    const draftFingerprint = buildFingerprint([...draft.keywords, draft.title, draft.symptoms]);
     if (draftFingerprint.size === 0) return null;
 
     const candidates = await this.prisma.knowledgeBaseArticle.findMany({
@@ -92,12 +83,12 @@ export class KnowledgeLearningService {
 
     let best: { article: KnowledgeBaseArticle; score: number } | null = null;
     for (const article of candidates) {
-      const articleFingerprint = this.buildFingerprint(
-        article.keywords,
+      const articleFingerprint = buildFingerprint([
+        ...article.keywords,
         article.title,
         article.symptoms ?? "",
-      );
-      const shared = [...draftFingerprint].filter((token) => articleFingerprint.has(token)).length;
+      ]);
+      const shared = sharedTokens(draftFingerprint, articleFingerprint).length;
       const sameCategory = article.category.name === draft.category;
       const meetsThreshold = shared >= 2 || (shared >= 1 && sameCategory);
 
