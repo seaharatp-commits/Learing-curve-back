@@ -13,6 +13,7 @@ import type {
 
 const QUESTIONS_PER_QUIZ = 5;
 const MAX_GENERATION_ATTEMPTS = 3;
+const MIN_CONTENT_LENGTH = 50;
 
 const QUIZ_SYSTEM_PROMPT =
   "คุณคือผู้ช่วยสร้างแบบทดสอบปรนัยจากเนื้อหาความรู้ที่ให้มาเท่านั้น " +
@@ -89,6 +90,16 @@ export class QuizService {
   async generateFromArticle(articleId: string) {
     const article = await this.prisma.knowledgeBaseArticle.findUnique({ where: { id: articleId } });
     if (!article) throw new NotFoundException("ไม่พบบทความนี้");
+
+    // The system prompt forbids the AI from inventing facts not in the
+    // article, so very short content can't yield 5 distinct, truthful
+    // questions -- it would just fail after burning 3 AI roundtrips.
+    // Reject upfront with a message that tells the admin what to fix.
+    if (article.content.trim().length < MIN_CONTENT_LENGTH) {
+      throw new BadRequestException(
+        "เนื้อหาของบทความนี้สั้นเกินไปสำหรับสร้างแบบทดสอบ กรุณาเพิ่มรายละเอียดในบทความก่อน",
+      );
+    }
 
     let questions: GeneratedQuestion[] = [];
     let lastError: unknown;

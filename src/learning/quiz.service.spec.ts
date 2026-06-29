@@ -42,12 +42,24 @@ describe("QuizService.generateFromArticle", () => {
     await expect(service.generateFromArticle("missing")).rejects.toThrow(NotFoundException);
   });
 
+  it("rejects articles whose content is too short to generate truthful questions from", async () => {
+    const { service, prisma, aiService } = makeService();
+    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({
+      id: "kb-1",
+      title: "ทดสอบ",
+      content: "เนื้อหาทดสอบครั้งที่ 1",
+    });
+
+    await expect(service.generateFromArticle("kb-1")).rejects.toThrow(BadRequestException);
+    expect(aiService.chat).not.toHaveBeenCalled();
+  });
+
   it("creates a quiz with parsed questions from a valid AI response", async () => {
     const { service, prisma, aiService } = makeService();
     prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({
       id: "kb-1",
       title: "วิธีรีเซ็ตรหัสผ่าน",
-      content: "...",
+      content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง",
     });
     aiService.chat.mockResolvedValue(VALID_QUESTIONS_JSON);
     prisma.quiz.create.mockResolvedValue({ id: "quiz-1", questions: [{}, {}] });
@@ -68,7 +80,7 @@ describe("QuizService.generateFromArticle", () => {
 
   it("rejects malformed AI responses (e.g. missing options) instead of saving garbage", async () => {
     const { service, prisma, aiService } = makeService();
-    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "y" });
+    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง" });
     aiService.chat.mockResolvedValue(JSON.stringify({ questions: [{ question: "no options" }] }));
 
     await expect(service.generateFromArticle("kb-1")).rejects.toThrow(BadRequestException);
@@ -77,7 +89,7 @@ describe("QuizService.generateFromArticle", () => {
 
   it("recovers from a trailing comma (real failure seen from the AI gateway)", async () => {
     const { service, prisma, aiService } = makeService();
-    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "y" });
+    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง" });
     // Strips the closing brace's trailing comma that breaks JSON.parse.
     const withTrailingComma = VALID_QUESTIONS_JSON.replace(/\]\}$/, "],}");
     aiService.chat.mockResolvedValue(withTrailingComma);
@@ -89,7 +101,7 @@ describe("QuizService.generateFromArticle", () => {
 
   it("throws BadRequestException when the AI response is unrecoverably broken", async () => {
     const { service, prisma, aiService } = makeService();
-    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "y" });
+    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง" });
     aiService.chat.mockResolvedValue('{"questions": [{"question": "unterminated string]}');
 
     await expect(service.generateFromArticle("kb-1")).rejects.toThrow(BadRequestException);
@@ -101,7 +113,7 @@ describe("QuizService.generateFromArticle", () => {
     prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({
       id: "kb-1",
       title: "วิธีรีเซ็ตรหัสผ่าน",
-      content: "...",
+      content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง",
     });
     aiService.chat
       .mockResolvedValueOnce('{"questions": [{"question": "unterminated string]}')
