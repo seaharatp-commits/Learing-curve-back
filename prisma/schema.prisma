@@ -134,6 +134,7 @@ model KnowledgeBaseArticle {
   category     Category      @relation(fields: [categoryId], references: [id])
   author       User?         @relation("KbAuthor", fields: [authorId], references: [id], onDelete: SetNull)
   sourceIssues IssueReport[]
+  generatedQuizzes Quiz[]
 
   @@index([categoryId])
   @@map("knowledge_base_articles")
@@ -152,16 +153,35 @@ model Lesson {
 }
 
 model Quiz {
-  id        String   @id @default(uuid())
-  lessonId  String
-  title     String
-  createdAt DateTime @default(now())
+  id              String   @id @default(uuid())
+  lessonId        String?
+  sourceArticleId String?
+  title           String
+  createdAt       DateTime @default(now())
 
-  lesson   Lesson        @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-  attempts QuizAttempt[]
+  lesson        Lesson?               @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  sourceArticle KnowledgeBaseArticle? @relation(fields: [sourceArticleId], references: [id], onDelete: SetNull)
+  questions     Question[]
+  attempts      QuizAttempt[]
 
   @@index([lessonId])
+  @@index([sourceArticleId])
   @@map("quizzes")
+}
+
+model Question {
+  id           String   @id @default(uuid())
+  quizId       String
+  questionText String
+  options      String[]
+  correctIndex Int
+  explanation  String?
+  createdAt    DateTime @default(now())
+
+  quiz Quiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
+
+  @@index([quizId])
+  @@map("questions")
 }
 
 model QuizAttempt {

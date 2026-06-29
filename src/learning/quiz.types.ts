@@ -1,0 +1,46 @@
+export interface GeneratedQuestion {
+  question: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string;
+}
+
+export interface QuizListItem {
+  id: string;
+  title: string;
+  questionCount: number;
+  sourceArticleTitle: string | null;
+}
+
+export interface QuizQuestionForAttempt {
+  id: string;
+  questionText: string;
+  options: string[];
+}
+
+export interface QuizForAttempt {
+  id: string;
+  title: string;
+  questions: QuizQuestionForAttempt[];
+}
+
+export interface SubmitAnswer {
+  questionId: string;
+  selectedIndex: number;
+}
+
+export interface AnswerResult {
+  questionId: string;
+  selectedIndex: number;
+  correctIndex: number;
+  isCorrect: boolean;
+  explanation: string | null;
+}
+
+export interface QuizAttemptResult {
+  attemptId: string;
+  score: number;
+  totalQuestions: number;
+  correctCount: number;
+  answers: AnswerResult[];
+}
