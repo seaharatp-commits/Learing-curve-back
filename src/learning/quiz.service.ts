@@ -12,6 +12,7 @@ import type {
 } from "./quiz.types";
 
 const QUESTIONS_PER_QUIZ = 5;
+const MAX_GENERATION_ATTEMPTS = 3;
 
 const QUIZ_SYSTEM_PROMPT =
   "คุณคือผู้ช่วยสร้างแบบทดสอบปรนัยจากเนื้อหาความรู้ที่ให้มาเท่านั้น " +
@@ -44,9 +45,12 @@ export class QuizService {
   // extraction prompts elsewhere, and longer generations are where models
   // slip up (stray trailing comma, etc). Try a raw parse first, then retry
   // once after stripping trailing commas before throwing.
+  // Throws a plain Error (not BadRequestException) on unparseable JSON so
+  // generateFromArticle can retry against the AI gateway instead of failing
+  // the request on the first flaky response.
   private parseQuestions(raw: string): GeneratedQuestion[] {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new BadRequestException("AI ไม่ได้ตอบกลับเป็น JSON ลองสร้างใหม่อีกครั้ง");
+    if (!jsonMatch) throw new Error("AI response did not contain JSON");
 
     let parsed: { questions?: unknown };
     try {
@@ -56,10 +60,8 @@ export class QuizService {
         const cleaned = jsonMatch[0].replace(/,\s*([\]}])/g, "$1");
         parsed = JSON.parse(cleaned) as { questions?: unknown };
       } catch (error) {
-        this.logger.error(`Failed to parse AI quiz response: ${error}`);
-        throw new BadRequestException(
-          "AI สร้างแบบทดสอบไม่สำเร็จ (รูปแบบข้อมูลไม่ถูกต้อง) กรุณาลองใหม่อีกครั้ง",
-        );
+        this.logger.warn(`Failed to parse AI quiz response, will retry: ${error}`);
+        throw new Error("AI response was not valid JSON");
       }
     }
     if (!Array.isArray(parsed.questions)) return [];
@@ -88,10 +90,25 @@ export class QuizService {
     const article = await this.prisma.knowledgeBaseArticle.findUnique({ where: { id: articleId } });
     if (!article) throw new NotFoundException("ไม่พบบทความนี้");
 
-    const reply = await this.aiService.chat(this.buildExtractionMessages(article));
-    const questions = this.parseQuestions(reply);
+    let questions: GeneratedQuestion[] = [];
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
+      try {
+        const reply = await this.aiService.chat(this.buildExtractionMessages(article));
+        questions = this.parseQuestions(reply);
+        if (questions.length > 0) break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
     if (questions.length === 0) {
-      throw new BadRequestException("AI ไม่สามารถสร้างคำถามจากบทความนี้ได้ ลองอีกครั้ง");
+      this.logger.error(
+        `AI failed to generate a usable quiz after ${MAX_GENERATION_ATTEMPTS} attempts: ${lastError}`,
+      );
+      throw new BadRequestException(
+        "AI สร้างแบบทดสอบไม่สำเร็จหลังจากลองหลายครั้ง กรุณาลองใหม่อีกครั้ง",
+      );
     }
 
     const quiz = await this.prisma.quiz.create({

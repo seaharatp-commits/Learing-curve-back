@@ -95,6 +95,24 @@ describe("QuizService.generateFromArticle", () => {
     await expect(service.generateFromArticle("kb-1")).rejects.toThrow(BadRequestException);
     expect(prisma.quiz.create).not.toHaveBeenCalled();
   });
+
+  it("retries the AI gateway after a flaky malformed response and succeeds on a later attempt", async () => {
+    const { service, prisma, aiService } = makeService();
+    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({
+      id: "kb-1",
+      title: "วิธีรีเซ็ตรหัสผ่าน",
+      content: "...",
+    });
+    aiService.chat
+      .mockResolvedValueOnce('{"questions": [{"question": "unterminated string]}')
+      .mockResolvedValueOnce(VALID_QUESTIONS_JSON);
+    prisma.quiz.create.mockResolvedValue({ id: "quiz-1", questions: [{}, {}] });
+
+    const result = await service.generateFromArticle("kb-1");
+
+    expect(result.id).toBe("quiz-1");
+    expect(aiService.chat).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("QuizService.submitAttempt", () => {
