@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from "@nestjs/common";
+import { Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import type { RequestUser } from "../auth/strategies/jwt.strategy";
@@ -12,5 +12,15 @@ export class LearningController {
   @Get("dashboard")
   getDashboard(@CurrentUser() user: RequestUser) {
     return this.learningService.getDashboard(user.id);
+  }
+
+  @Get("lessons/:id")
+  getLesson(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.learningService.getLesson(user.id, id);
+  }
+
+  @Post("lessons/:id/complete")
+  markLessonCompleted(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.learningService.markLessonCompleted(user.id, id);
   }
 }

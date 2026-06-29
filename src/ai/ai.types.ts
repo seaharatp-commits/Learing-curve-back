@@ -3,6 +3,11 @@ export interface AiChatMessage {
   content: string;
 }
 
+export interface AiChatOptions {
+  temperature?: number;
+  maxTokens?: number;
+}
+
 export interface AiUsage {
   prompt_tokens: number;
   completion_tokens: number;

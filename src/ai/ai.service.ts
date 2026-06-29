@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import axios from "axios";
-import type { AiChatMessage, AiChatResponse } from "./ai.types";
+import type { AiChatMessage, AiChatOptions, AiChatResponse } from "./ai.types";
 
 @Injectable()
 export class AiService {
@@ -16,14 +16,14 @@ export class AiService {
     this.model = this.configService.get<string>("AI_API_MODEL") || undefined;
   }
 
-  async chat(messages: AiChatMessage[]): Promise<string> {
+  async chat(messages: AiChatMessage[], options: AiChatOptions = {}): Promise<string> {
     const { data } = await axios.post<AiChatResponse>(
       `${this.baseUrl}/chat`,
       {
         ...(this.provider ? { provider: this.provider } : {}),
         ...(this.model ? { model: this.model } : {}),
-        temperature: 0.7,
-        max_tokens: 512,
+        temperature: options.temperature ?? 0.7,
+        max_tokens: options.maxTokens ?? 512,
         messages,
       },
       { timeout: 30_000 },

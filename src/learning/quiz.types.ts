@@ -5,6 +5,18 @@ export interface GeneratedQuestion {
   explanation: string;
 }
 
+export interface GeneratedTopicLesson {
+  title: string;
+  content: string;
+  questions: GeneratedQuestion[];
+}
+
+export interface GeneratedTopicResult {
+  lessonId: string;
+  quizId: string;
+  title: string;
+}
+
 export interface QuizListItem {
   id: string;
   title: string;

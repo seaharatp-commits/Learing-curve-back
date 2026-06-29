@@ -6,6 +6,8 @@ import type { SubmitAttemptDto } from "./dto/submit-attempt.dto";
 import type {
   AnswerResult,
   GeneratedQuestion,
+  GeneratedTopicLesson,
+  GeneratedTopicResult,
   QuizAttemptResult,
   QuizForAttempt,
   QuizListItem,
@@ -21,6 +23,13 @@ const QUIZ_SYSTEM_PROMPT =
   `สร้างคำถามปรนัย ${QUESTIONS_PER_QUIZ} ข้อ แต่ละข้อมีตัวเลือก 4 ข้อ และมีคำตอบที่ถูกต้องเพียงข้อเดียว ` +
   "ตอบกลับเป็น JSON เท่านั้น ไม่มีคำอธิบายอื่น ไม่ใช้ markdown หรือ code fence " +
   'รูปแบบ: {"questions": [{"question": string, "options": string[4], "correctIndex": number, "explanation": string}]}';
+
+const TOPIC_LESSON_SYSTEM_PROMPT =
+  "คุณคือผู้ช่วยสร้างบทเรียนสั้นภาษาไทยจากหัวข้อที่ผู้ใช้สนใจ ให้เนื้อหาถูกต้อง อ่านง่าย และเหมาะกับการเรียนด้วยตนเอง " +
+  "ตอบกลับเป็น JSON เท่านั้น ไม่มี markdown หรือ code fence " +
+  `สร้างคำถามปรนัย ${QUESTIONS_PER_QUIZ} ข้อ แต่ละข้อมีตัวเลือก 4 ข้อ และมีคำตอบที่ถูกต้องเพียงข้อเดียว ` +
+  'รูปแบบ: {"title": string, "content": string, "questions": [{"question": string, "options": string[4], "correctIndex": number, "explanation": string}]} ' +
+  "content ควรเป็นบทเรียน 3-5 ย่อหน้า มีแนวคิดหลัก ขั้นตอน/ตัวอย่าง และข้อควรระวัง";
 
 @Injectable()
 export class QuizService {
@@ -41,6 +50,13 @@ export class QuizService {
     ];
   }
 
+  private buildTopicLessonMessages(topic: string): AiChatMessage[] {
+    return [
+      { role: "system", content: TOPIC_LESSON_SYSTEM_PROMPT },
+      { role: "user", content: `หัวข้อที่อยากเรียนรู้: ${topic}` },
+    ];
+  }
+
   // The AI occasionally emits near-valid JSON for this prompt specifically —
   // 5 questions x 4 options is a much bigger payload than the single-object
   // extraction prompts elsewhere, and longer generations are where models
@@ -49,25 +65,27 @@ export class QuizService {
   // Throws a plain Error (not BadRequestException) on unparseable JSON so
   // generateFromArticle can retry against the AI gateway instead of failing
   // the request on the first flaky response.
-  private parseQuestions(raw: string): GeneratedQuestion[] {
+  private parseJsonObject(raw: string): Record<string, unknown> {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("AI response did not contain JSON");
 
-    let parsed: { questions?: unknown };
     try {
-      parsed = JSON.parse(jsonMatch[0]) as { questions?: unknown };
+      return JSON.parse(jsonMatch[0]) as Record<string, unknown>;
     } catch {
       try {
         const cleaned = jsonMatch[0].replace(/,\s*([\]}])/g, "$1");
-        parsed = JSON.parse(cleaned) as { questions?: unknown };
+        return JSON.parse(cleaned) as Record<string, unknown>;
       } catch (error) {
         this.logger.warn(`Failed to parse AI quiz response, will retry: ${error}`);
         throw new Error("AI response was not valid JSON");
       }
     }
-    if (!Array.isArray(parsed.questions)) return [];
+  }
 
-    return parsed.questions
+  private normalizeQuestions(value: unknown): GeneratedQuestion[] {
+    if (!Array.isArray(value)) return [];
+
+    return value
       .filter(
         (q): q is GeneratedQuestion =>
           typeof q === "object" &&
@@ -85,6 +103,24 @@ export class QuizService {
         correctIndex: q.correctIndex,
         explanation: typeof q.explanation === "string" ? q.explanation : "",
       }));
+  }
+
+  private parseQuestions(raw: string): GeneratedQuestion[] {
+    const parsed = this.parseJsonObject(raw);
+    return this.normalizeQuestions(parsed.questions);
+  }
+
+  private parseTopicLesson(raw: string): GeneratedTopicLesson {
+    const parsed = this.parseJsonObject(raw);
+    const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
+    const content = typeof parsed.content === "string" ? parsed.content.trim() : "";
+    const questions = this.normalizeQuestions(parsed.questions);
+
+    if (!title || !content || questions.length === 0) {
+      throw new Error("AI response did not contain a usable lesson");
+    }
+
+    return { title, content, questions };
   }
 
   async generateFromArticle(articleId: string) {
@@ -142,6 +178,62 @@ export class QuizService {
     return quiz;
   }
 
+  async generateFromTopic(topic: string): Promise<GeneratedTopicResult> {
+    const cleanTopic = topic.trim();
+    if (cleanTopic.length < 2) {
+      throw new BadRequestException("กรุณาระบุหัวข้อที่อยากเรียนรู้อย่างน้อย 2 ตัวอักษร");
+    }
+
+    let generated: GeneratedTopicLesson | null = null;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
+      try {
+        const reply = await this.aiService.chat(this.buildTopicLessonMessages(cleanTopic), {
+          temperature: 0.6,
+          maxTokens: 1600,
+        });
+        generated = this.parseTopicLesson(reply);
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (!generated) {
+      this.logger.error(
+        `AI failed to generate a usable lesson after ${MAX_GENERATION_ATTEMPTS} attempts: ${lastError}`,
+      );
+      throw new BadRequestException("AI สร้างบทเรียนไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
+    }
+
+    const maxOrder = await this.prisma.lesson.aggregate({ _max: { order: true } });
+    const lesson = await this.prisma.lesson.create({
+      data: {
+        title: generated.title,
+        content: generated.content,
+        order: (maxOrder._max.order ?? 0) + 1,
+        quizzes: {
+          create: {
+            title: `แบบทดสอบ: ${generated.title}`,
+            questions: {
+              create: generated.questions.map((q) => ({
+                questionText: q.question,
+                options: q.options,
+                correctIndex: q.correctIndex,
+                explanation: q.explanation,
+              })),
+            },
+          },
+        },
+      },
+      include: { quizzes: true },
+    });
+
+    const quiz = lesson.quizzes[0];
+    this.logger.log(`Generated lesson ${lesson.id} and quiz ${quiz.id} from topic "${cleanTopic}"`);
+    return { lessonId: lesson.id, quizId: quiz.id, title: lesson.title };
+  }
+
   async list(): Promise<QuizListItem[]> {
     const quizzes = await this.prisma.quiz.findMany({
       orderBy: { createdAt: "desc" },
@@ -174,6 +266,14 @@ export class QuizService {
         options: q.options,
       })),
     };
+  }
+
+  async remove(quizId: string) {
+    const quiz = await this.prisma.quiz.findUnique({ where: { id: quizId } });
+    if (!quiz) throw new NotFoundException("ไม่พบแบบทดสอบนี้");
+
+    await this.prisma.quiz.delete({ where: { id: quizId } });
+    return { success: true };
   }
 
   async submitAttempt(userId: string, quizId: string, dto: SubmitAttemptDto): Promise<QuizAttemptResult> {
