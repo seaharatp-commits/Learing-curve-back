@@ -8,11 +8,15 @@ export interface GeneratedQuestion {
 export interface GeneratedTopicLesson {
   title: string;
   content: string;
-  questions: GeneratedQuestion[];
 }
 
 export interface GeneratedTopicResult {
   lessonId: string;
+  quizId: string | null;
+  title: string;
+}
+
+export interface GeneratedLessonQuizResult {
   quizId: string;
   title: string;
 }

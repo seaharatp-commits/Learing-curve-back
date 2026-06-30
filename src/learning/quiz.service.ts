@@ -7,6 +7,7 @@ import type { SubmitAttemptDto } from "./dto/submit-attempt.dto";
 import type {
   AnswerResult,
   GeneratedQuestion,
+  GeneratedLessonQuizResult,
   GeneratedTopicLesson,
   GeneratedTopicResult,
   QuizAttemptResult,
@@ -28,8 +29,7 @@ const QUIZ_SYSTEM_PROMPT =
 const TOPIC_LESSON_SYSTEM_PROMPT =
   "คุณคือผู้ช่วยสร้างบทเรียนสั้นภาษาไทยจากหัวข้อที่ผู้ใช้สนใจ ให้เนื้อหาถูกต้อง อ่านง่าย และเหมาะกับการเรียนด้วยตนเอง " +
   "ตอบกลับเป็น JSON เท่านั้น ไม่มี markdown หรือ code fence " +
-  `สร้างคำถามปรนัย ${QUESTIONS_PER_QUIZ} ข้อ แต่ละข้อมีตัวเลือก 4 ข้อ และมีคำตอบที่ถูกต้องเพียงข้อเดียว ` +
-  'รูปแบบ: {"title": string, "content": string, "questions": [{"question": string, "options": string[4], "correctIndex": number, "explanation": string}]} ' +
+  'รูปแบบ: {"title": string, "content": string} ' +
   "content ควรเป็นบทเรียน 3-5 ย่อหน้า มีแนวคิดหลัก ขั้นตอน/ตัวอย่าง และข้อควรระวัง";
 
 @Injectable()
@@ -39,7 +39,7 @@ export class QuizService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiService: AiService,
-  ) {}
+  ) { }
 
   private buildExtractionMessages(article: {
     title: string;
@@ -55,6 +55,19 @@ export class QuizService {
     return [
       { role: "system", content: TOPIC_LESSON_SYSTEM_PROMPT },
       { role: "user", content: `หัวข้อที่อยากเรียนรู้: ${topic}` },
+    ];
+  }
+
+  private buildLessonQuizMessages(lesson: { title: string; content: string }, additionalPrompt: string): AiChatMessage[] {
+    const focus = additionalPrompt.trim();
+    return [
+      { role: "system", content: QUIZ_SYSTEM_PROMPT },
+      {
+        role: "user",
+        content:
+          `หัวข้อบทเรียน: ${lesson.title}\n\nเนื้อหาบทเรียน: ${lesson.content}` +
+          (focus ? `\n\nคำถามหรือข้อมูลเพิ่มเติมล่าสุดจากผู้เรียน: ${focus}` : ""),
+      },
     ];
   }
 
@@ -115,13 +128,12 @@ export class QuizService {
     const parsed = this.parseJsonObject(raw);
     const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
     const content = typeof parsed.content === "string" ? parsed.content.trim() : "";
-    const questions = this.normalizeQuestions(parsed.questions);
 
-    if (!title || !content || questions.length === 0) {
+    if (!title || !content) {
       throw new Error("AI response did not contain a usable lesson");
     }
 
-    return { title, content, questions };
+    return { title, content };
   }
 
   async generateFromArticle(user: RequestUser, articleId: string) {
@@ -209,33 +221,82 @@ export class QuizService {
     }
 
     const maxOrder = await this.prisma.lesson.aggregate({ _max: { order: true } });
+    
+    console.log("current user", user.id, user.email, user.role);
+
+    const existingUser = await this.prisma.user.findUnique({
+      where: { id: user.id },
+    });
+
+    console.log("existingUser", existingUser);
     const lesson = await this.prisma.lesson.create({
       data: {
         title: generated.title,
         createdByUserId: user.id,
         content: generated.content,
         order: (maxOrder._max.order ?? 0) + 1,
-        quizzes: {
-          create: {
-            title: `แบบทดสอบ: ${generated.title}`,
-            createdByUserId: user.id,
-            questions: {
-              create: generated.questions.map((q) => ({
-                questionText: q.question,
-                options: q.options,
-                correctIndex: q.correctIndex,
-                explanation: q.explanation,
-              })),
-            },
-          },
+      },
+
+    });
+    
+    this.logger.log(`Generated lesson ${lesson.id} from topic "${cleanTopic}"`);
+    return { lessonId: lesson.id, quizId: null, title: lesson.title };
+  }
+
+  async generateQuizFromLesson(
+    user: RequestUser,
+    lessonId: string,
+    additionalPrompt = "",
+  ): Promise<GeneratedLessonQuizResult> {
+    const lesson = await this.prisma.lesson.findUnique({ where: { id: lessonId } });
+    if (!lesson) throw new NotFoundException("ไม่พบบทเรียนนี้");
+    if (user.role !== "ADMIN" && lesson.createdByUserId !== user.id) {
+      throw new NotFoundException("ไม่พบบทเรียนนี้");
+    }
+    if (lesson.content.trim().length < MIN_CONTENT_LENGTH) {
+      throw new BadRequestException("เนื้อหาบทเรียนนี้สั้นเกินไปสำหรับสร้างแบบทดสอบ");
+    }
+
+    let questions: GeneratedQuestion[] = [];
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
+      try {
+        const reply = await this.aiService.chat(
+          this.buildLessonQuizMessages(lesson, additionalPrompt),
+          { temperature: 0.4, maxTokens: 1400 },
+        );
+        questions = this.parseQuestions(reply);
+        if (questions.length > 0) break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (questions.length === 0) {
+      this.logger.error(
+        `AI failed to generate a usable lesson quiz after ${MAX_GENERATION_ATTEMPTS} attempts: ${lastError}`,
+      );
+      throw new BadRequestException("AI สร้างแบบทดสอบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
+    }
+
+    const quiz = await this.prisma.quiz.create({
+      data: {
+        title: `แบบทดสอบ: ${lesson.title}`,
+        createdByUserId: user.id,
+        lessonId: lesson.id,
+        questions: {
+          create: questions.map((q) => ({
+            questionText: q.question,
+            options: q.options,
+            correctIndex: q.correctIndex,
+            explanation: q.explanation,
+          })),
         },
       },
-      include: { quizzes: true },
     });
 
-    const quiz = lesson.quizzes[0];
-    this.logger.log(`Generated lesson ${lesson.id} and quiz ${quiz.id} from topic "${cleanTopic}"`);
-    return { lessonId: lesson.id, quizId: quiz.id, title: lesson.title };
+    this.logger.log(`Generated quiz ${quiz.id} from lesson ${lesson.id}`);
+    return { quizId: quiz.id, title: quiz.title };
   }
 
   async list(user: RequestUser): Promise<QuizListItem[]> {

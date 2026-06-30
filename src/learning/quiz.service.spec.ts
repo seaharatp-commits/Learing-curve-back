@@ -39,7 +39,7 @@ const VALID_TOPIC_JSON = JSON.stringify({
 function makeService() {
   const prisma = {
     knowledgeBaseArticle: { findUnique: jest.fn() },
-    lesson: { aggregate: jest.fn(), create: jest.fn() },
+    lesson: { aggregate: jest.fn(), create: jest.fn(), findUnique: jest.fn() },
     quiz: { create: jest.fn(), delete: jest.fn(), findMany: jest.fn(), findUnique: jest.fn() },
     quizAttempt: { create: jest.fn() },
   };
@@ -146,21 +146,20 @@ describe("QuizService.generateFromArticle", () => {
 });
 
 describe("QuizService.generateFromTopic", () => {
-  it("creates a lesson with a generated quiz from a free-form topic", async () => {
+  it("creates a lesson without creating a quiz from a free-form topic", async () => {
     const { service, prisma, aiService } = makeService();
     aiService.chat.mockResolvedValue(VALID_TOPIC_JSON);
     prisma.lesson.aggregate.mockResolvedValue({ _max: { order: 4 } });
     prisma.lesson.create.mockResolvedValue({
       id: "lesson-1",
       title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
-      quizzes: [{ id: "quiz-1" }],
     });
 
     const result = await service.generateFromTopic(user, "รหัสผ่านปลอดภัย");
 
     expect(result).toEqual({
       lessonId: "lesson-1",
-      quizId: "quiz-1",
+      quizId: null,
       title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
     });
     expect(aiService.chat).toHaveBeenCalledWith(expect.any(Array), {
@@ -173,24 +172,55 @@ describe("QuizService.generateFromTopic", () => {
         createdByUserId: "user-1",
         content: "รหัสผ่านที่ดีควรเดายากและไม่ใช้ซ้ำ\n\nควรใช้ตัวจัดการรหัสผ่านเมื่อต้องจำหลายบัญชี",
         order: 5,
-        quizzes: {
-          create: {
-            title: "แบบทดสอบ: พื้นฐานความปลอดภัยของรหัสผ่าน",
-            createdByUserId: "user-1",
-            questions: {
-              create: [
-                {
-                  questionText: "ข้อใดเป็นแนวทางที่ดี?",
-                  options: ["ใช้ซ้ำทุกเว็บ", "ใช้วันเกิด", "ใช้ตัวจัดการรหัสผ่าน", "บอกเพื่อน"],
-                  correctIndex: 2,
-                  explanation: "ตัวจัดการรหัสผ่านช่วยสร้างและจำรหัสผ่านที่ซับซ้อน",
-                },
-              ],
+      },
+    });
+    expect(prisma.quiz.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("QuizService.generateQuizFromLesson", () => {
+  it("creates a quiz from lesson content and the latest additional prompt", async () => {
+    const { service, prisma, aiService } = makeService();
+    prisma.lesson.findUnique.mockResolvedValue({
+      id: "lesson-1",
+      title: "Lesson 1",
+      content: "This lesson content is long enough to generate a useful assessment for the learner.",
+      createdByUserId: "user-1",
+    });
+    aiService.chat.mockResolvedValue(VALID_QUESTIONS_JSON);
+    prisma.quiz.create.mockResolvedValue({ id: "quiz-1", title: "แบบทดสอบ: Lesson 1" });
+
+    const result = await service.generateQuizFromLesson(user, "lesson-1", "focus on examples");
+
+    expect(result).toEqual({ quizId: "quiz-1", title: "แบบทดสอบ: Lesson 1" });
+    expect(aiService.chat).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ content: expect.stringContaining("focus on examples") }),
+      ]),
+      { temperature: 0.4, maxTokens: 1400 },
+    );
+    expect(prisma.quiz.create).toHaveBeenCalledWith({
+      data: {
+        title: "แบบทดสอบ: Lesson 1",
+        createdByUserId: "user-1",
+        lessonId: "lesson-1",
+        questions: {
+          create: [
+            {
+              questionText: "ข้อ 1?",
+              options: ["A", "B", "C", "D"],
+              correctIndex: 1,
+              explanation: "เพราะ B ถูก",
             },
-          },
+            {
+              questionText: "ข้อ 2?",
+              options: ["A", "B", "C", "D"],
+              correctIndex: 0,
+              explanation: "เพราะ A ถูก",
+            },
+          ],
         },
       },
-      include: { quizzes: true },
     });
   });
 });
