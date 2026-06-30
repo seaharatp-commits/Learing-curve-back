@@ -1,5 +1,8 @@
 import { LearningService } from "./learning.service";
 import { PrismaService } from "../prisma/prisma.service";
+import type { RequestUser } from "../auth/strategies/jwt.strategy";
+
+const user: RequestUser = { id: "user-1", email: "user@example.com", role: "USER" };
 
 function makeService() {
   const prisma = {
@@ -19,7 +22,7 @@ describe("LearningService.getDashboard", () => {
     prisma.quizAttempt.findMany.mockResolvedValue([]);
     prisma.lesson.findMany.mockResolvedValue([]);
 
-    const result = await service.getDashboard("user-1");
+    const result = await service.getDashboard(user);
 
     expect(result.learningProgress).toEqual({
       completedLessons: 0,
@@ -49,7 +52,7 @@ describe("LearningService.getDashboard", () => {
       { id: "l3", title: "Lesson 3", progress: [{ completed: false }] },
     ]);
 
-    const result = await service.getDashboard("user-1");
+    const result = await service.getDashboard(user);
 
     expect(result.learningProgress).toEqual({
       completedLessons: 1,
@@ -79,7 +82,7 @@ describe("LearningService.getDashboard", () => {
       { id: "l1", title: "Lesson 1", progress: [{ completed: true }] },
     ]);
 
-    const result = await service.getDashboard("user-1");
+    const result = await service.getDashboard(user);
     expect(result.continueLearning).toBeNull();
   });
 
@@ -94,7 +97,7 @@ describe("LearningService.getDashboard", () => {
     ]);
     prisma.lesson.findMany.mockResolvedValue([]);
 
-    const result = await service.getDashboard("user-1");
+    const result = await service.getDashboard(user);
 
     // 3 attempts but only 2 distinct quizzes (q1 retaken) -> totalCompleted reflects quizzes, not attempts
     expect(result.quizPerformance).toEqual({
@@ -110,6 +113,7 @@ describe("LearningService.getLesson", () => {
     const { service, prisma } = makeService();
     prisma.lesson.findUnique.mockResolvedValue({
       id: "l1",
+      createdByUserId: "user-1",
       title: "Lesson 1",
       content: "เนื้อหา",
       progress: [{ completed: true, completedAt: new Date("2026-01-03") }],
@@ -118,7 +122,7 @@ describe("LearningService.getLesson", () => {
       ],
     });
 
-    const result = await service.getLesson("user-1", "l1");
+    const result = await service.getLesson(user, "l1");
 
     expect(result).toEqual({
       id: "l1",
@@ -144,14 +148,15 @@ describe("LearningService.getLesson", () => {
 describe("LearningService.markLessonCompleted", () => {
   it("upserts completed progress for the current user", async () => {
     const { service, prisma } = makeService();
-    prisma.lesson.findUnique.mockResolvedValue({ id: "l1" });
     prisma.lessonProgress.upsert.mockResolvedValue({
       lessonId: "l1",
       completed: true,
       completedAt: new Date("2026-01-04"),
     });
 
-    const result = await service.markLessonCompleted("user-1", "l1");
+    prisma.lesson.findUnique.mockResolvedValue({ id: "l1", createdByUserId: "user-1" });
+
+    const result = await service.markLessonCompleted(user, "l1");
 
     expect(result).toEqual({
       lessonId: "l1",

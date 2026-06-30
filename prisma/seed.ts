@@ -79,9 +79,10 @@ async function main() {
       const lesson = await prisma.lesson.create({
         data: {
           title: lessonTitles[i],
+          createdByUserId: admin.id,
           content: lessonContents[i],
           order: i + 1,
-          quizzes: { create: { title: `แบบทดสอบ: ${lessonTitles[i]}` } },
+          quizzes: { create: { title: `แบบทดสอบ: ${lessonTitles[i]}`, createdByUserId: admin.id } },
         },
         include: { quizzes: true },
       });

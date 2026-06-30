@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import type { LearningDashboard, LessonCompletion, LessonDetail } from "./learning-dashboard.types";
+import type { RequestUser } from "../auth/strategies/jwt.strategy";
 
 const RECENT_QUIZ_LIMIT = 5;
 
@@ -8,16 +9,20 @@ const RECENT_QUIZ_LIMIT = 5;
 export class LearningService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getDashboard(userId: string): Promise<LearningDashboard> {
+  async getDashboard(user: RequestUser): Promise<LearningDashboard> {
+    const userId = user.id;
+    const lessonScope = user.role === "ADMIN" ? {} : { createdByUserId: userId };
+    const quizScope = user.role === "ADMIN" ? {} : { quiz: { createdByUserId: userId } };
     const [totalLessons, completedLessons, attempts, lessons] = await Promise.all([
-      this.prisma.lesson.count(),
-      this.prisma.lessonProgress.count({ where: { userId, completed: true } }),
+      this.prisma.lesson.count({ where: lessonScope }),
+      this.prisma.lessonProgress.count({ where: { userId, completed: true, lesson: lessonScope } }),
       this.prisma.quizAttempt.findMany({
-        where: { userId },
+        where: { userId, ...quizScope },
         orderBy: { completedAt: "desc" },
         include: { quiz: true },
       }),
       this.prisma.lesson.findMany({
+        where: lessonScope,
         orderBy: { order: "asc" },
         include: { progress: { where: { userId } } },
       }),
@@ -50,7 +55,8 @@ export class LearningService {
     };
   }
 
-  async getLesson(userId: string, lessonId: string): Promise<LessonDetail> {
+  async getLesson(user: RequestUser, lessonId: string): Promise<LessonDetail> {
+    const userId = user.id;
     const lesson = await this.prisma.lesson.findUnique({
       where: { id: lessonId },
       include: {
@@ -62,6 +68,9 @@ export class LearningService {
       },
     });
     if (!lesson) throw new NotFoundException("ไม่พบบทเรียนนี้");
+    if (user.role !== "ADMIN" && lesson.createdByUserId !== userId) {
+      throw new NotFoundException("ไม่พบบทเรียนนี้");
+    }
 
     const progress = lesson.progress[0];
     return {
@@ -78,9 +87,13 @@ export class LearningService {
     };
   }
 
-  async markLessonCompleted(userId: string, lessonId: string): Promise<LessonCompletion> {
+  async markLessonCompleted(user: RequestUser, lessonId: string): Promise<LessonCompletion> {
+    const userId = user.id;
     const lesson = await this.prisma.lesson.findUnique({ where: { id: lessonId } });
     if (!lesson) throw new NotFoundException("ไม่พบบทเรียนนี้");
+    if (user.role !== "ADMIN" && lesson.createdByUserId !== userId) {
+      throw new NotFoundException("ไม่พบบทเรียนนี้");
+    }
 
     const progress = await this.prisma.lessonProgress.upsert({
       where: { userId_lessonId: { userId, lessonId } },

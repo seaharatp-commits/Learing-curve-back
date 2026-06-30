@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from "@nes
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import type { AiChatMessage } from "../ai/ai.types";
+import type { RequestUser } from "../auth/strategies/jwt.strategy";
 import type { SubmitAttemptDto } from "./dto/submit-attempt.dto";
 import type {
   AnswerResult,
@@ -123,7 +124,7 @@ export class QuizService {
     return { title, content, questions };
   }
 
-  async generateFromArticle(articleId: string) {
+  async generateFromArticle(user: RequestUser, articleId: string) {
     const article = await this.prisma.knowledgeBaseArticle.findUnique({ where: { id: articleId } });
     if (!article) throw new NotFoundException("ไม่พบบทความนี้");
 
@@ -161,6 +162,7 @@ export class QuizService {
     const quiz = await this.prisma.quiz.create({
       data: {
         title: `แบบทดสอบ: ${article.title}`,
+        createdByUserId: user.id,
         sourceArticleId: article.id,
         questions: {
           create: questions.map((q) => ({
@@ -178,7 +180,7 @@ export class QuizService {
     return quiz;
   }
 
-  async generateFromTopic(topic: string): Promise<GeneratedTopicResult> {
+  async generateFromTopic(user: RequestUser, topic: string): Promise<GeneratedTopicResult> {
     const cleanTopic = topic.trim();
     if (cleanTopic.length < 2) {
       throw new BadRequestException("กรุณาระบุหัวข้อที่อยากเรียนรู้อย่างน้อย 2 ตัวอักษร");
@@ -210,11 +212,13 @@ export class QuizService {
     const lesson = await this.prisma.lesson.create({
       data: {
         title: generated.title,
+        createdByUserId: user.id,
         content: generated.content,
         order: (maxOrder._max.order ?? 0) + 1,
         quizzes: {
           create: {
             title: `แบบทดสอบ: ${generated.title}`,
+            createdByUserId: user.id,
             questions: {
               create: generated.questions.map((q) => ({
                 questionText: q.question,
@@ -234,10 +238,11 @@ export class QuizService {
     return { lessonId: lesson.id, quizId: quiz.id, title: lesson.title };
   }
 
-  async list(): Promise<QuizListItem[]> {
+  async list(user: RequestUser): Promise<QuizListItem[]> {
     const quizzes = await this.prisma.quiz.findMany({
+      where: user.role === "ADMIN" ? undefined : { createdByUserId: user.id },
       orderBy: { createdAt: "desc" },
-      include: { sourceArticle: true, _count: { select: { questions: true } } },
+      include: { createdBy: true, sourceArticle: true, _count: { select: { questions: true } } },
     });
 
     return quizzes
@@ -247,15 +252,21 @@ export class QuizService {
         title: quiz.title,
         questionCount: quiz._count.questions,
         sourceArticleTitle: quiz.sourceArticle?.title ?? null,
+        createdByUserId: quiz.createdByUserId,
+        createdByName: quiz.createdBy?.name ?? null,
+        createdByEmail: quiz.createdBy?.email ?? null,
       }));
   }
 
-  async getForAttempt(quizId: string): Promise<QuizForAttempt> {
+  async getForAttempt(user: RequestUser, quizId: string): Promise<QuizForAttempt> {
     const quiz = await this.prisma.quiz.findUnique({
       where: { id: quizId },
       include: { questions: true },
     });
     if (!quiz) throw new NotFoundException("ไม่พบแบบทดสอบนี้");
+    if (user.role !== "ADMIN" && quiz.createdByUserId !== user.id) {
+      throw new NotFoundException("ไม่พบแบบทดสอบนี้");
+    }
 
     return {
       id: quiz.id,
@@ -268,20 +279,27 @@ export class QuizService {
     };
   }
 
-  async remove(quizId: string) {
+  async remove(user: RequestUser, quizId: string) {
     const quiz = await this.prisma.quiz.findUnique({ where: { id: quizId } });
     if (!quiz) throw new NotFoundException("ไม่พบแบบทดสอบนี้");
+    if (user.role !== "ADMIN" && quiz.createdByUserId !== user.id) {
+      throw new NotFoundException("ไม่พบแบบทดสอบนี้");
+    }
 
     await this.prisma.quiz.delete({ where: { id: quizId } });
     return { success: true };
   }
 
-  async submitAttempt(userId: string, quizId: string, dto: SubmitAttemptDto): Promise<QuizAttemptResult> {
+  async submitAttempt(user: RequestUser, quizId: string, dto: SubmitAttemptDto): Promise<QuizAttemptResult> {
+    const userId = user.id;
     const quiz = await this.prisma.quiz.findUnique({
       where: { id: quizId },
       include: { questions: true },
     });
     if (!quiz) throw new NotFoundException("ไม่พบแบบทดสอบนี้");
+    if (user.role !== "ADMIN" && quiz.createdByUserId !== userId) {
+      throw new NotFoundException("ไม่พบแบบทดสอบนี้");
+    }
     if (quiz.questions.length === 0) throw new BadRequestException("แบบทดสอบนี้ยังไม่มีคำถาม");
 
     const questionById = new Map(quiz.questions.map((q) => [q.id, q]));

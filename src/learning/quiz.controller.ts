@@ -16,28 +16,28 @@ export class QuizController {
 
   @Roles("ADMIN")
   @Post("generate-from-article")
-  generate(@Body() dto: GenerateQuizDto) {
-    return this.quizService.generateFromArticle(dto.articleId);
+  generate(@CurrentUser() user: RequestUser, @Body() dto: GenerateQuizDto) {
+    return this.quizService.generateFromArticle(user, dto.articleId);
   }
 
   @Post("generate-from-topic")
-  generateFromTopic(@Body() dto: GenerateTopicDto) {
-    return this.quizService.generateFromTopic(dto.topic);
+  generateFromTopic(@CurrentUser() user: RequestUser, @Body() dto: GenerateTopicDto) {
+    return this.quizService.generateFromTopic(user, dto.topic);
   }
 
   @Get()
-  list() {
-    return this.quizService.list();
+  list(@CurrentUser() user: RequestUser) {
+    return this.quizService.list(user);
   }
 
   @Get(":id")
-  getForAttempt(@Param("id") id: string) {
-    return this.quizService.getForAttempt(id);
+  getForAttempt(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.quizService.getForAttempt(user, id);
   }
 
   @Delete(":id")
-  remove(@Param("id") id: string) {
-    return this.quizService.remove(id);
+  remove(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.quizService.remove(user, id);
   }
 
   @Post(":id/attempts")
@@ -46,6 +46,6 @@ export class QuizController {
     @Param("id") id: string,
     @Body() dto: SubmitAttemptDto,
   ) {
-    return this.quizService.submitAttempt(user.id, id, dto);
+    return this.quizService.submitAttempt(user, id, dto);
   }
 }

@@ -11,16 +11,16 @@ export class LearningController {
 
   @Get("dashboard")
   getDashboard(@CurrentUser() user: RequestUser) {
-    return this.learningService.getDashboard(user.id);
+    return this.learningService.getDashboard(user);
   }
 
   @Get("lessons/:id")
   getLesson(@CurrentUser() user: RequestUser, @Param("id") id: string) {
-    return this.learningService.getLesson(user.id, id);
+    return this.learningService.getLesson(user, id);
   }
 
   @Post("lessons/:id/complete")
   markLessonCompleted(@CurrentUser() user: RequestUser, @Param("id") id: string) {
-    return this.learningService.markLessonCompleted(user.id, id);
+    return this.learningService.markLessonCompleted(user, id);
   }
 }

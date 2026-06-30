@@ -2,6 +2,9 @@ import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { QuizService } from "./quiz.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
+import type { RequestUser } from "../auth/strategies/jwt.strategy";
+
+const user: RequestUser = { id: "user-1", email: "user@example.com", role: "USER" };
 
 const VALID_QUESTIONS_JSON = JSON.stringify({
   questions: [
@@ -53,7 +56,7 @@ describe("QuizService.generateFromArticle", () => {
     const { service, prisma } = makeService();
     prisma.knowledgeBaseArticle.findUnique.mockResolvedValue(null);
 
-    await expect(service.generateFromArticle("missing")).rejects.toThrow(NotFoundException);
+    await expect(service.generateFromArticle(user, "missing")).rejects.toThrow(NotFoundException);
   });
 
   it("rejects articles whose content is too short to generate truthful questions from", async () => {
@@ -64,7 +67,7 @@ describe("QuizService.generateFromArticle", () => {
       content: "เนื้อหาทดสอบครั้งที่ 1",
     });
 
-    await expect(service.generateFromArticle("kb-1")).rejects.toThrow(BadRequestException);
+    await expect(service.generateFromArticle(user, "kb-1")).rejects.toThrow(BadRequestException);
     expect(aiService.chat).not.toHaveBeenCalled();
   });
 
@@ -78,10 +81,11 @@ describe("QuizService.generateFromArticle", () => {
     aiService.chat.mockResolvedValue(VALID_QUESTIONS_JSON);
     prisma.quiz.create.mockResolvedValue({ id: "quiz-1", questions: [{}, {}] });
 
-    const result = await service.generateFromArticle("kb-1");
+    const result = await service.generateFromArticle(user, "kb-1");
 
     expect(result.id).toBe("quiz-1");
     const createArgs = prisma.quiz.create.mock.calls[0][0];
+    expect(createArgs.data.createdByUserId).toBe("user-1");
     expect(createArgs.data.sourceArticleId).toBe("kb-1");
     expect(createArgs.data.questions.create).toHaveLength(2);
     expect(createArgs.data.questions.create[0]).toEqual({
@@ -97,7 +101,7 @@ describe("QuizService.generateFromArticle", () => {
     prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง" });
     aiService.chat.mockResolvedValue(JSON.stringify({ questions: [{ question: "no options" }] }));
 
-    await expect(service.generateFromArticle("kb-1")).rejects.toThrow(BadRequestException);
+    await expect(service.generateFromArticle(user, "kb-1")).rejects.toThrow(BadRequestException);
     expect(prisma.quiz.create).not.toHaveBeenCalled();
   });
 
@@ -109,7 +113,7 @@ describe("QuizService.generateFromArticle", () => {
     aiService.chat.mockResolvedValue(withTrailingComma);
     prisma.quiz.create.mockResolvedValue({ id: "quiz-1", questions: [{}, {}] });
 
-    const result = await service.generateFromArticle("kb-1");
+    const result = await service.generateFromArticle(user, "kb-1");
     expect(result.id).toBe("quiz-1");
   });
 
@@ -118,7 +122,7 @@ describe("QuizService.generateFromArticle", () => {
     prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง" });
     aiService.chat.mockResolvedValue('{"questions": [{"question": "unterminated string]}');
 
-    await expect(service.generateFromArticle("kb-1")).rejects.toThrow(BadRequestException);
+    await expect(service.generateFromArticle(user, "kb-1")).rejects.toThrow(BadRequestException);
     expect(prisma.quiz.create).not.toHaveBeenCalled();
   });
 
@@ -134,7 +138,7 @@ describe("QuizService.generateFromArticle", () => {
       .mockResolvedValueOnce(VALID_QUESTIONS_JSON);
     prisma.quiz.create.mockResolvedValue({ id: "quiz-1", questions: [{}, {}] });
 
-    const result = await service.generateFromArticle("kb-1");
+    const result = await service.generateFromArticle(user, "kb-1");
 
     expect(result.id).toBe("quiz-1");
     expect(aiService.chat).toHaveBeenCalledTimes(2);
@@ -152,7 +156,7 @@ describe("QuizService.generateFromTopic", () => {
       quizzes: [{ id: "quiz-1" }],
     });
 
-    const result = await service.generateFromTopic("รหัสผ่านปลอดภัย");
+    const result = await service.generateFromTopic(user, "รหัสผ่านปลอดภัย");
 
     expect(result).toEqual({
       lessonId: "lesson-1",
@@ -166,11 +170,13 @@ describe("QuizService.generateFromTopic", () => {
     expect(prisma.lesson.create).toHaveBeenCalledWith({
       data: {
         title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
+        createdByUserId: "user-1",
         content: "รหัสผ่านที่ดีควรเดายากและไม่ใช้ซ้ำ\n\nควรใช้ตัวจัดการรหัสผ่านเมื่อต้องจำหลายบัญชี",
         order: 5,
         quizzes: {
           create: {
             title: "แบบทดสอบ: พื้นฐานความปลอดภัยของรหัสผ่าน",
+            createdByUserId: "user-1",
             questions: {
               create: [
                 {
@@ -194,7 +200,7 @@ describe("QuizService.submitAttempt", () => {
     const { service, prisma } = makeService();
     prisma.quiz.findUnique.mockResolvedValue(null);
 
-    await expect(service.submitAttempt("user-1", "missing", { answers: [] })).rejects.toThrow(
+    await expect(service.submitAttempt(user, "missing", { answers: [] })).rejects.toThrow(
       NotFoundException,
     );
   });
@@ -203,6 +209,7 @@ describe("QuizService.submitAttempt", () => {
     const { service, prisma } = makeService();
     prisma.quiz.findUnique.mockResolvedValue({
       id: "quiz-1",
+      createdByUserId: "user-1",
       questions: [
         { id: "q1", correctIndex: 1, explanation: "exp1" },
         { id: "q2", correctIndex: 0, explanation: "exp2" },
@@ -210,7 +217,7 @@ describe("QuizService.submitAttempt", () => {
     });
     prisma.quizAttempt.create.mockResolvedValue({ id: "attempt-1" });
 
-    const result = await service.submitAttempt("user-1", "quiz-1", {
+    const result = await service.submitAttempt(user, "quiz-1", {
       answers: [
         { questionId: "q1", selectedIndex: 1 }, // correct
         { questionId: "q2", selectedIndex: 2 }, // wrong
@@ -233,16 +240,16 @@ describe("QuizService.remove", () => {
     const { service, prisma } = makeService();
     prisma.quiz.findUnique.mockResolvedValue(null);
 
-    await expect(service.remove("missing")).rejects.toThrow(NotFoundException);
+    await expect(service.remove(user, "missing")).rejects.toThrow(NotFoundException);
     expect(prisma.quiz.delete).not.toHaveBeenCalled();
   });
 
   it("deletes an existing quiz", async () => {
     const { service, prisma } = makeService();
-    prisma.quiz.findUnique.mockResolvedValue({ id: "quiz-1" });
+    prisma.quiz.findUnique.mockResolvedValue({ id: "quiz-1", createdByUserId: "user-1" });
     prisma.quiz.delete.mockResolvedValue({ id: "quiz-1" });
 
-    const result = await service.remove("quiz-1");
+    const result = await service.remove(user, "quiz-1");
 
     expect(result).toEqual({ success: true });
     expect(prisma.quiz.delete).toHaveBeenCalledWith({ where: { id: "quiz-1" } });

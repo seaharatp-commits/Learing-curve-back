@@ -6,16 +6,22 @@ export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getStats() {
-    const [totalChats, knowledgeBaseCount, quizCount] = await Promise.all([
+    const [userCount, totalChats, knowledgeBaseCount, quizCount, quizAttemptCount, completedLessonCount] = await Promise.all([
+      this.prisma.user.count(),
       this.prisma.chatSession.count(),
       this.prisma.knowledgeBaseArticle.count(),
       this.prisma.quiz.count({ where: { questions: { some: {} } } }),
+      this.prisma.quizAttempt.count(),
+      this.prisma.lessonProgress.count({ where: { completed: true } }),
     ]);
 
     return {
+      userCount,
       totalChats,
       knowledgeBaseCount,
       quizCount,
+      quizAttemptCount,
+      completedLessonCount,
     };
   }
 }

@@ -30,6 +30,8 @@ model User {
   knowledgeBaseArticles KnowledgeBaseArticle[] @relation("KbAuthor")
   quizAttempts    QuizAttempt[]
   lessonProgress  LessonProgress[]
+  createdLessons  Lesson[] @relation("LessonCreator")
+  createdQuizzes  Quiz[] @relation("QuizCreator")
 
   @@map("users")
 }
@@ -105,29 +107,35 @@ model KnowledgeBaseArticle {
 
 model Lesson {
   id        String   @id @default(uuid())
+  createdByUserId String?
   title     String
   content   String   @default("")
   order     Int
   createdAt DateTime @default(now())
 
+  createdBy User? @relation("LessonCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
   quizzes  Quiz[]
   progress LessonProgress[]
 
+  @@index([createdByUserId])
   @@map("lessons")
 }
 
 model Quiz {
   id              String   @id @default(uuid())
+  createdByUserId String?
   lessonId        String?
   sourceArticleId String?
   title           String
   createdAt       DateTime @default(now())
 
+  createdBy     User?                 @relation("QuizCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
   lesson        Lesson?               @relation(fields: [lessonId], references: [id], onDelete: Cascade)
   sourceArticle KnowledgeBaseArticle? @relation(fields: [sourceArticleId], references: [id], onDelete: SetNull)
   questions     Question[]
   attempts      QuizAttempt[]
 
+  @@index([createdByUserId])
   @@index([lessonId])
   @@index([sourceArticleId])
   @@map("quizzes")
