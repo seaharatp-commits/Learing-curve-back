@@ -14,7 +14,7 @@ Relations:
 ```
 User 1---* ChatSession 1---* ChatMessage
 User 1---* IssueReport *---1 Category
-User 1---* KnowledgeBaseArticle *---1 Categoryd
+User 1---* KnowledgeBaseArticle *---1 Category
 ```
 
 ## API
