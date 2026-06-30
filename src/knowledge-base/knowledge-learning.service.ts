@@ -7,7 +7,7 @@ import type { AiChatMessage } from "../ai/ai.types";
 import type { ArticleDraft, ArticleFields } from "./article-draft.types";
 import type { ConfirmKnowledgeDto } from "./dto/confirm-knowledge.dto";
 import { buildFingerprint, sharedTokens } from "./text-similarity.util";
-import type { IssueReport, KnowledgeBaseArticle } from "@prisma/client";
+import type { KnowledgeBaseArticle } from "@prisma/client";
 
 const EXTRACTION_SYSTEM_PROMPT =
   "คุณคือผู้ช่วยเขียนฐานความรู้ (Knowledge Base) เปลี่ยน support ticket ที่แก้ไขแล้วให้เป็นบทความมาตรฐาน " +
@@ -26,22 +26,6 @@ export class KnowledgeLearningService {
     private readonly categoriesService: CategoriesService,
     private readonly recommendationService: RecommendationService,
   ) {}
-
-  private buildExtractionMessages(
-    issue: IssueReport & { category: { name: string } },
-  ): AiChatMessage[] {
-    const ticketText = [
-      `หัวข้อ: ${issue.title}`,
-      `หมวดหมู่: ${issue.category.name}`,
-      `ความสำคัญ: ${issue.priority}`,
-      `รายละเอียดที่ผู้ใช้รายงาน: ${issue.description}`,
-    ].join("\n");
-
-    return [
-      { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
-      { role: "user", content: ticketText },
-    ];
-  }
 
   private buildExtractionMessagesFromText(text: string): AiChatMessage[] {
     return [
@@ -74,13 +58,6 @@ export class KnowledgeLearningService {
       tags: asStringArray(parsed.tags),
       category: asString(parsed.category, "ทั่วไป"),
     };
-  }
-
-  private async extractDraft(
-    issue: IssueReport & { category: { name: string } },
-  ): Promise<ArticleDraft> {
-    const reply = await this.aiService.chat(this.buildExtractionMessages(issue));
-    return this.parseDraft(reply);
   }
 
   private async extractDraftFromText(text: string): Promise<ArticleDraft> {
@@ -157,80 +134,6 @@ export class KnowledgeLearningService {
       tags: mergedTags,
       category: draft.category,
     };
-  }
-
-  async learnFromIssue(issueId: string) {
-    const issue = await this.prisma.issueReport.findUnique({
-      where: { id: issueId },
-      include: { category: true },
-    });
-    if (!issue) throw new NotFoundException("ไม่พบปัญหานี้");
-
-    const draft = await this.extractDraft(issue);
-    const similar = await this.findSimilarArticle(draft);
-
-    let article: KnowledgeBaseArticle;
-    let action: "created" | "updated";
-
-    if (similar) {
-      const merged = this.mergeFields(similar, draft);
-      const category = await this.categoriesService.resolveByName(merged.category);
-      article = await this.prisma.knowledgeBaseArticle.update({
-        where: { id: similar.id },
-        data: {
-          summary: merged.summary,
-          symptoms: merged.symptoms,
-          environment: merged.environment,
-          rootCause: merged.rootCause,
-          resolution: merged.resolution,
-          verification: merged.verification,
-          keywords: merged.keywords,
-          tags: merged.tags,
-          categoryId: category.id,
-          content: this.renderContent(merged),
-        },
-      });
-      action = "updated";
-      this.logger.log(`Merged issue ${issueId} into existing KB article ${article.id}`);
-    } else {
-      const category = await this.categoriesService.resolveByName(draft.category);
-      const fields: ArticleFields = {
-        title: draft.title,
-        summary: draft.summary,
-        symptoms: draft.symptoms,
-        environment: draft.environment,
-        rootCause: draft.rootCause,
-        resolution: draft.resolution,
-        verification: draft.verification,
-        keywords: draft.keywords,
-        tags: draft.tags,
-        category: draft.category,
-      };
-      article = await this.prisma.knowledgeBaseArticle.create({
-        data: {
-          title: fields.title,
-          content: this.renderContent(fields),
-          categoryId: category.id,
-          summary: fields.summary,
-          symptoms: fields.symptoms,
-          environment: fields.environment,
-          rootCause: fields.rootCause,
-          resolution: fields.resolution,
-          verification: fields.verification,
-          keywords: fields.keywords,
-          tags: fields.tags,
-        },
-      });
-      action = "created";
-      this.logger.log(`Created new KB article ${article.id} from issue ${issueId}`);
-    }
-
-    await this.prisma.issueReport.update({
-      where: { id: issueId },
-      data: { status: "RESOLVED", knowledgeBaseArticleId: article.id },
-    });
-
-    return { action, article };
   }
 
   // Step 1 of the "Add Knowledge" flow: turn free-form text into a structured

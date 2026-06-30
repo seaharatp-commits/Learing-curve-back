@@ -20,7 +20,6 @@ const DRAFT_JSON = {
 
 function makeService() {
   const prisma = {
-    issueReport: { findUnique: jest.fn(), update: jest.fn() },
     knowledgeBaseArticle: {
       findMany: jest.fn(),
       findUnique: jest.fn(),
@@ -43,78 +42,6 @@ function makeService() {
 
   return { service, prisma, aiService, categoriesService, recommendationService };
 }
-
-describe("KnowledgeLearningService.learnFromIssue", () => {
-  it("throws NotFoundException when the issue does not exist", async () => {
-    const { service, prisma } = makeService();
-    prisma.issueReport.findUnique.mockResolvedValue(null);
-
-    await expect(service.learnFromIssue("missing")).rejects.toThrow(NotFoundException);
-  });
-
-  it("creates a new article when no similar one exists", async () => {
-    const { service, prisma } = makeService();
-    prisma.issueReport.findUnique.mockResolvedValue({
-      id: "issue-1",
-      title: "เปิดแอปไม่ได้",
-      description: "...",
-      priority: "MEDIUM",
-      category: { name: "ปัญหาการติดตั้ง" },
-    });
-    prisma.knowledgeBaseArticle.findMany.mockResolvedValue([]); // no candidates -> no merge
-    prisma.knowledgeBaseArticle.create.mockResolvedValue({ id: "kb-new" });
-
-    const result = await service.learnFromIssue("issue-1");
-
-    expect(result.action).toBe("created");
-    expect(prisma.knowledgeBaseArticle.create).toHaveBeenCalledTimes(1);
-    expect(prisma.knowledgeBaseArticle.update).not.toHaveBeenCalled();
-    expect(prisma.issueReport.update).toHaveBeenCalledWith({
-      where: { id: "issue-1" },
-      data: { status: "RESOLVED", knowledgeBaseArticleId: "kb-new" },
-    });
-  });
-
-  it("merges into the matching article instead of creating a duplicate", async () => {
-    const { service, prisma } = makeService();
-    prisma.issueReport.findUnique.mockResolvedValue({
-      id: "issue-1",
-      title: "เปิดแอปไม่ได้",
-      description: "...",
-      priority: "MEDIUM",
-      category: { name: "ปัญหาการติดตั้ง" },
-    });
-    prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
-      {
-        id: "kb-existing",
-        title: "เปิดแอปไม่ได้บน Windows",
-        summary: "ไม่ระบุ",
-        symptoms: "ไม่ระบุ",
-        environment: "ไม่ระบุ",
-        rootCause: "ไม่ระบุ",
-        resolution: "ไม่ระบุ",
-        verification: "ไม่ระบุ",
-        keywords: ["windows"],
-        tags: [],
-        category: { name: "ปัญหาการติดตั้ง" },
-      },
-    ]);
-    prisma.knowledgeBaseArticle.update.mockResolvedValue({ id: "kb-existing" });
-
-    const result = await service.learnFromIssue("issue-1");
-
-    expect(result.action).toBe("updated");
-    expect(prisma.knowledgeBaseArticle.create).not.toHaveBeenCalled();
-    expect(prisma.knowledgeBaseArticle.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: "kb-existing" } }),
-    );
-    // Merged fields should fill in the existing article's "ไม่ระบุ" placeholders
-    // with the new draft's actual values rather than leaving them blank.
-    const updateData = prisma.knowledgeBaseArticle.update.mock.calls[0][0].data;
-    expect(updateData.resolution).toBe("รัน Administrator");
-    expect(updateData.keywords).toEqual(["windows", "error"]);
-  });
-});
 
 describe("KnowledgeLearningService.confirmKnowledge", () => {
   it("creates a new article with the given author when no target is set", async () => {

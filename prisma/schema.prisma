@@ -17,18 +17,6 @@ enum MessageRole {
   ASSISTANT
 }
 
-enum IssuePriority {
-  LOW
-  MEDIUM
-  HIGH
-}
-
-enum IssueStatus {
-  OPEN
-  IN_PROGRESS
-  RESOLVED
-}
-
 model User {
   id           String   @id @default(uuid())
   email        String   @unique
@@ -39,7 +27,6 @@ model User {
   updatedAt    DateTime @updatedAt
 
   chatSessions    ChatSession[]
-  issues          IssueReport[]
   knowledgeBaseArticles KnowledgeBaseArticle[] @relation("KbAuthor")
   quizAttempts    QuizAttempt[]
   lessonProgress  LessonProgress[]
@@ -52,7 +39,6 @@ model Category {
   name      String   @unique
   createdAt DateTime @default(now())
 
-  issues               IssueReport[]
   knowledgeBaseArticles KnowledgeBaseArticle[]
 
   @@map("categories")
@@ -85,28 +71,6 @@ model ChatMessage {
   @@map("chat_messages")
 }
 
-model IssueReport {
-  id          String        @id @default(uuid())
-  title       String
-  description String
-  categoryId  String
-  priority    IssuePriority @default(MEDIUM)
-  status      IssueStatus   @default(OPEN)
-  reporterId  String
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
-
-  knowledgeBaseArticleId String?
-
-  category             Category              @relation(fields: [categoryId], references: [id])
-  reporter             User                  @relation(fields: [reporterId], references: [id], onDelete: Cascade)
-  knowledgeBaseArticle KnowledgeBaseArticle? @relation(fields: [knowledgeBaseArticleId], references: [id], onDelete: SetNull)
-
-  @@index([status])
-  @@index([categoryId])
-  @@map("issue_reports")
-}
-
 model KnowledgeBaseArticle {
   id         String   @id @default(uuid())
   title      String
@@ -133,7 +97,6 @@ model KnowledgeBaseArticle {
 
   category     Category      @relation(fields: [categoryId], references: [id])
   author       User?         @relation("KbAuthor", fields: [authorId], references: [id], onDelete: SetNull)
-  sourceIssues IssueReport[]
   generatedQuizzes Quiz[]
 
   @@index([categoryId])

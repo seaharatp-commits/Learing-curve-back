@@ -6,7 +6,6 @@ import { AiModule } from "./ai/ai.module";
 import { AuthModule } from "./auth/auth.module";
 import { ChatModule } from "./chat/chat.module";
 import { HistoryModule } from "./history/history.module";
-import { IssuesModule } from "./issues/issues.module";
 import { KnowledgeBaseModule } from "./knowledge-base/knowledge-base.module";
 import { DashboardModule } from "./dashboard/dashboard.module";
 import { LearningModule } from "./learning/learning.module";
@@ -20,7 +19,6 @@ import { LearningModule } from "./learning/learning.module";
     AuthModule,
     ChatModule,
     HistoryModule,
-    IssuesModule,
     KnowledgeBaseModule,
     DashboardModule,
     LearningModule,
