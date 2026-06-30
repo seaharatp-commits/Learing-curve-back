@@ -38,6 +38,7 @@ const VALID_TOPIC_JSON = JSON.stringify({
 
 function makeService() {
   const prisma = {
+    user: { findUnique: jest.fn().mockResolvedValue({ id: "user-1" }) },
     knowledgeBaseArticle: { findUnique: jest.fn() },
     lesson: { aggregate: jest.fn(), create: jest.fn(), findUnique: jest.fn() },
     quiz: { create: jest.fn(), delete: jest.fn(), findMany: jest.fn(), findUnique: jest.fn() },
@@ -164,7 +165,7 @@ describe("QuizService.generateFromTopic", () => {
     });
     expect(aiService.chat).toHaveBeenCalledWith(expect.any(Array), {
       temperature: 0.6,
-      maxTokens: 1600,
+      maxTokens: 1800,
     });
     expect(prisma.lesson.create).toHaveBeenCalledWith({
       data: {
@@ -175,6 +176,54 @@ describe("QuizService.generateFromTopic", () => {
       },
     });
     expect(prisma.quiz.create).not.toHaveBeenCalled();
+  });
+
+  it("creates a lesson from a plain-text AI response when JSON is missing", async () => {
+    const { service, prisma, aiService } = makeService();
+    aiService.chat.mockResolvedValue(
+      "This is a plain lesson response that is long enough to be saved when the AI ignores JSON formatting.",
+    );
+    prisma.lesson.aggregate.mockResolvedValue({ _max: { order: 0 } });
+    prisma.lesson.create.mockResolvedValue({
+      id: "lesson-plain",
+      title: "Plain topic",
+    });
+
+    const result = await service.generateFromTopic(user, "Plain topic");
+
+    expect(result).toEqual({ lessonId: "lesson-plain", quizId: null, title: "Plain topic" });
+    expect(prisma.lesson.create).toHaveBeenCalledWith({
+      data: {
+        title: "Plain topic",
+        createdByUserId: "user-1",
+        content:
+          "This is a plain lesson response that is long enough to be saved when the AI ignores JSON formatting.",
+        order: 1,
+      },
+    });
+  });
+});
+
+describe("QuizService.askLessonQuestion", () => {
+  it("answers a learner question using the lesson and chat history", async () => {
+    const { service, prisma, aiService } = makeService();
+    prisma.lesson.findUnique.mockResolvedValue({
+      id: "lesson-1",
+      title: "Lesson 1",
+      content: "Lesson content",
+      createdByUserId: "user-1",
+    });
+    aiService.chat.mockResolvedValue("Answer from lesson");
+
+    const result = await service.askLessonQuestion(user, "lesson-1", "What next?", "ผู้เรียน: hi");
+
+    expect(result).toEqual({ answer: "Answer from lesson" });
+    expect(aiService.chat).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ content: expect.stringContaining("What next?") }),
+      ]),
+      { temperature: 0.4, maxTokens: 700 },
+    );
   });
 });
 

@@ -6,6 +6,7 @@ import { LearningService } from "./learning.service";
 import { QuizService } from "./quiz.service";
 import { GenerateTopicDto } from "./dto/generate-topic.dto";
 import { GenerateLessonQuizDto } from "./dto/generate-lesson-quiz.dto";
+import { AskLessonQuestionDto } from "./dto/ask-lesson-question.dto";
 
 @UseGuards(JwtAuthGuard)
 @Controller("learning")
@@ -26,9 +27,17 @@ export class LearningController {
   }
 
   @Post("lessons/generate-from-topic")
-  generateLessonFromTopic(@CurrentUser() user: RequestUser, @Body() dto: GenerateTopicDto) 
-  {
-    return this.quizService.generateFromTopic(user, dto.topic);
+  generateLessonFromTopic(@CurrentUser() user: RequestUser, @Body() dto: GenerateTopicDto) {
+    return this.quizService.generateFromTopic(user, dto.topic, dto.detail);
+  }
+
+  @Post("lessons/:id/chat")
+  askLessonQuestion(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() dto: AskLessonQuestionDto,
+  ) {
+    return this.quizService.askLessonQuestion(user, id, dto.message, dto.chatHistory);
   }
 
   @Post("lessons/:id/quizzes/generate")

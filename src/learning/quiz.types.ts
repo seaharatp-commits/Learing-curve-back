@@ -21,6 +21,10 @@ export interface GeneratedLessonQuizResult {
   title: string;
 }
 
+export interface LessonChatResult {
+  answer: string;
+}
+
 export interface QuizListItem {
   id: string;
   title: string;

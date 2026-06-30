@@ -46,12 +46,18 @@ export class LearningService {
 
     const nextLesson = lessons.find((lesson) => !lesson.progress.some((p) => p.completed));
     const continueLearning = nextLesson ? { lessonId: nextLesson.id, title: nextLesson.title } : null;
+    const lessonItems = lessons.map((lesson) => ({
+      lessonId: lesson.id,
+      title: lesson.title,
+      completed: lesson.progress.some((p) => p.completed),
+    }));
 
     return {
       learningProgress: { completedLessons, totalLessons, percentage },
       quizPerformance: { totalCompleted, averageScore, latestScore },
       recentQuizzes,
       continueLearning,
+      lessons: lessonItems,
     };
   }
 

@@ -22,11 +22,18 @@ export interface ContinueLearning {
   title: string;
 }
 
+export interface LearningLessonItem {
+  lessonId: string;
+  title: string;
+  completed: boolean;
+}
+
 export interface LearningDashboard {
   learningProgress: LearningProgress;
   quizPerformance: QuizPerformance;
   recentQuizzes: RecentQuiz[];
   continueLearning: ContinueLearning | null;
+  lessons: LearningLessonItem[];
 }
 
 export interface LessonQuizItem {

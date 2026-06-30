@@ -36,9 +36,10 @@ describe("LearningService.getDashboard", () => {
     });
     expect(result.recentQuizzes).toEqual([]);
     expect(result.continueLearning).toBeNull();
+    expect(result.lessons).toEqual([]);
   });
 
-  it("computes percentage, average/latest score, and picks the first incomplete lesson", async () => {
+  it("computes percentage, average/latest score, and returns selectable lessons", async () => {
     const { service, prisma } = makeService();
     prisma.lesson.count.mockResolvedValue(4);
     prisma.lessonProgress.count.mockResolvedValue(1);
@@ -69,7 +70,12 @@ describe("LearningService.getDashboard", () => {
       { id: "a2", title: "Quiz 2", score: 90, completedAt: new Date("2026-01-02") },
       { id: "a1", title: "Quiz 1", score: 70, completedAt: new Date("2026-01-01") },
     ]);
-    // l1 is completed, l2 has no progress row at all -> first incomplete
+    expect(result.lessons).toEqual([
+      { lessonId: "l1", title: "Lesson 1", completed: true },
+      { lessonId: "l2", title: "Lesson 2", completed: false },
+      { lessonId: "l3", title: "Lesson 3", completed: false },
+    ]);
+    // Kept for compatibility; UI now lets users choose any lesson from result.lessons.
     expect(result.continueLearning).toEqual({ lessonId: "l2", title: "Lesson 2" });
   });
 
@@ -84,6 +90,7 @@ describe("LearningService.getDashboard", () => {
 
     const result = await service.getDashboard(user);
     expect(result.continueLearning).toBeNull();
+    expect(result.lessons).toEqual([{ lessonId: "l1", title: "Lesson 1", completed: true }]);
   });
 
   it("counts distinct quizzes for totalCompleted but averages across every attempt, including retakes", async () => {

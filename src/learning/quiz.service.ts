@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import type { AiChatMessage } from "../ai/ai.types";
@@ -6,10 +12,11 @@ import type { RequestUser } from "../auth/strategies/jwt.strategy";
 import type { SubmitAttemptDto } from "./dto/submit-attempt.dto";
 import type {
   AnswerResult,
-  GeneratedQuestion,
   GeneratedLessonQuizResult,
+  GeneratedQuestion,
   GeneratedTopicLesson,
   GeneratedTopicResult,
+  LessonChatResult,
   QuizAttemptResult,
   QuizForAttempt,
   QuizListItem,
@@ -27,7 +34,9 @@ const QUIZ_SYSTEM_PROMPT =
   'รูปแบบ: {"questions": [{"question": string, "options": string[4], "correctIndex": number, "explanation": string}]}';
 
 const TOPIC_LESSON_SYSTEM_PROMPT =
-  "คุณคือผู้ช่วยสร้างบทเรียนสั้นภาษาไทยจากหัวข้อที่ผู้ใช้สนใจ ให้เนื้อหาถูกต้อง อ่านง่าย และเหมาะกับการเรียนด้วยตนเอง " +
+  "คุณคือผู้ช่วยสร้างบทเรียนภาษาไทยจากหัวข้อที่ผู้ใช้สนใจ ให้เนื้อหาถูกต้อง อ่านง่าย และเหมาะกับการเรียนด้วยตนเอง " +
+  "ใช้รายละเอียด/ข้อมูลประกอบที่ผู้ใช้ให้มาเป็นบริบทสำคัญเพื่อให้ตอบตรง topic แต่ถ้าข้อมูลประกอบไม่พอให้สรุปอย่างระมัดระวัง " +
+  "อย่าสร้างแบบทดสอบในขั้นตอนนี้ " +
   "ตอบกลับเป็น JSON เท่านั้น ไม่มี markdown หรือ code fence " +
   'รูปแบบ: {"title": string, "content": string} ' +
   "content ควรเป็นบทเรียน 3-5 ย่อหน้า มีแนวคิดหลัก ขั้นตอน/ตัวอย่าง และข้อควรระวัง";
@@ -39,46 +48,82 @@ export class QuizService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiService: AiService,
-  ) { }
+  ) {}
 
-  private buildExtractionMessages(article: {
-    title: string;
-    content: string;
-  }): AiChatMessage[] {
+  private buildExtractionMessages(article: { title: string; content: string }): AiChatMessage[] {
     return [
       { role: "system", content: QUIZ_SYSTEM_PROMPT },
       { role: "user", content: `หัวข้อ: ${article.title}\n\nเนื้อหา: ${article.content}` },
     ];
   }
 
-  private buildTopicLessonMessages(topic: string): AiChatMessage[] {
+  private buildTopicLessonMessages(topic: string, detail: string): AiChatMessage[] {
+    const cleanDetail = detail.trim();
     return [
       { role: "system", content: TOPIC_LESSON_SYSTEM_PROMPT },
-      { role: "user", content: `หัวข้อที่อยากเรียนรู้: ${topic}` },
+      {
+        role: "user",
+        content:
+          `หัวข้อที่อยากเรียนรู้: ${topic}` +
+          (cleanDetail ? `\n\nรายละเอียด/ข้อมูลประกอบเพื่อช่วยให้ตอบตรงหัวข้อ:\n${cleanDetail}` : ""),
+      },
     ];
   }
 
-  private buildLessonQuizMessages(lesson: { title: string; content: string }, additionalPrompt: string): AiChatMessage[] {
+  private buildLessonChatMessages(
+    lesson: { title: string; content: string },
+    message: string,
+    chatHistory = "",
+  ): AiChatMessage[] {
+    return [
+      {
+        role: "system",
+        content:
+          "You are a teaching assistant for the current lesson. Use the lesson content as the primary context. " +
+          "If the learner asks a question that is related to the lesson but the answer is not directly present in the lesson content, you may add general knowledge, examples, analogies, or expanded explanation. " +
+          "When you add information beyond the lesson content, clearly label it in Thai as 'คำอธิบายเพิ่มเติม:' or 'บริบทเพิ่มเติม:' before that part. " +
+          "Do not answer questions that are unrelated or too far from the lesson; briefly say in Thai that the question is outside this lesson and invite the learner to ask something connected to the topic. " +
+          "Answer in Thai, keep the tone supportive, and focus on helping the learner understand before taking the quiz.",
+      },
+      {
+        role: "system",
+        content:
+          "คุณคือผู้ช่วยติวภาษาไทย ตอบคำถามโดยยึดหัวข้อและเนื้อหาบทเรียนที่ให้มาเป็นหลัก " +
+          "ถ้าผู้เรียนถามนอกเรื่อง ให้ดึงกลับมาเชื่อมกับบทเรียน ตอบกระชับ ชัดเจน และช่วยให้เข้าใจก่อนทำแบบทดสอบ",
+      },
+      {
+        role: "user",
+        content:
+          `หัวข้อบทเรียน: ${lesson.title}\n\nเนื้อหาบทเรียน/ข้อมูลอ้างอิง:\n${lesson.content}` +
+          (chatHistory.trim() ? `\n\nประวัติการคุยก่อนหน้า:\n${chatHistory.trim()}` : "") +
+          `\n\nคำถามล่าสุดของผู้เรียน: ${message.trim()}`,
+      },
+    ];
+  }
+
+  private buildLessonQuizMessages(
+    lesson: { title: string; content: string },
+    additionalPrompt: string,
+  ): AiChatMessage[] {
     const focus = additionalPrompt.trim();
     return [
       { role: "system", content: QUIZ_SYSTEM_PROMPT },
       {
         role: "user",
         content:
-          `หัวข้อบทเรียน: ${lesson.title}\n\nเนื้อหาบทเรียน: ${lesson.content}` +
-          (focus ? `\n\nคำถามหรือข้อมูลเพิ่มเติมล่าสุดจากผู้เรียน: ${focus}` : ""),
+          `หัวข้อบทเรียน: ${lesson.title}\n\nเนื้อหาบทเรียน:\n${lesson.content}` +
+          (focus ? `\n\nบทสนทนา/คำถามเพิ่มเติมล่าสุดจากผู้เรียน:\n${focus}` : ""),
       },
     ];
   }
 
-  // The AI occasionally emits near-valid JSON for this prompt specifically —
-  // 5 questions x 4 options is a much bigger payload than the single-object
-  // extraction prompts elsewhere, and longer generations are where models
-  // slip up (stray trailing comma, etc). Try a raw parse first, then retry
-  // once after stripping trailing commas before throwing.
-  // Throws a plain Error (not BadRequestException) on unparseable JSON so
-  // generateFromArticle can retry against the AI gateway instead of failing
-  // the request on the first flaky response.
+  private async ensureCurrentUserExists(user: RequestUser) {
+    const existingUser = await this.prisma.user.findUnique({ where: { id: user.id } });
+    if (!existingUser) {
+      throw new UnauthorizedException("บัญชีผู้ใช้นี้ไม่มีอยู่ในระบบ กรุณาเข้าสู่ระบบใหม่");
+    }
+  }
+
   private parseJsonObject(raw: string): Record<string, unknown> {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("AI response did not contain JSON");
@@ -124,9 +169,25 @@ export class QuizService {
     return this.normalizeQuestions(parsed.questions);
   }
 
-  private parseTopicLesson(raw: string): GeneratedTopicLesson {
-    const parsed = this.parseJsonObject(raw);
-    const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
+  private parseTopicLesson(raw: string, fallbackTitle: string): GeneratedTopicLesson {
+    let parsed: Record<string, unknown> | null = null;
+    try {
+      parsed = this.parseJsonObject(raw);
+    } catch {
+      const content = raw
+        .replace(/```(?:json)?/gi, "")
+        .replace(/```/g, "")
+        .trim();
+      if (content.length >= MIN_CONTENT_LENGTH) {
+        return { title: fallbackTitle, content };
+      }
+      throw new Error("AI response did not contain a usable lesson");
+    }
+
+    const title =
+      typeof parsed.title === "string" && parsed.title.trim()
+        ? parsed.title.trim()
+        : fallbackTitle;
     const content = typeof parsed.content === "string" ? parsed.content.trim() : "";
 
     if (!title || !content) {
@@ -140,10 +201,6 @@ export class QuizService {
     const article = await this.prisma.knowledgeBaseArticle.findUnique({ where: { id: articleId } });
     if (!article) throw new NotFoundException("ไม่พบบทความนี้");
 
-    // The system prompt forbids the AI from inventing facts not in the
-    // article, so very short content can't yield 5 distinct, truthful
-    // questions -- it would just fail after burning 3 AI roundtrips.
-    // Reject upfront with a message that tells the admin what to fix.
     if (article.content.trim().length < MIN_CONTENT_LENGTH) {
       throw new BadRequestException(
         "เนื้อหาของบทความนี้สั้นเกินไปสำหรับสร้างแบบทดสอบ กรุณาเพิ่มรายละเอียดในบทความก่อน",
@@ -192,21 +249,22 @@ export class QuizService {
     return quiz;
   }
 
-  async generateFromTopic(user: RequestUser, topic: string): Promise<GeneratedTopicResult> {
+  async generateFromTopic(user: RequestUser, topic: string, detail = ""): Promise<GeneratedTopicResult> {
     const cleanTopic = topic.trim();
     if (cleanTopic.length < 2) {
       throw new BadRequestException("กรุณาระบุหัวข้อที่อยากเรียนรู้อย่างน้อย 2 ตัวอักษร");
     }
+    await this.ensureCurrentUserExists(user);
 
     let generated: GeneratedTopicLesson | null = null;
     let lastError: unknown;
     for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
       try {
-        const reply = await this.aiService.chat(this.buildTopicLessonMessages(cleanTopic), {
+        const reply = await this.aiService.chat(this.buildTopicLessonMessages(cleanTopic, detail), {
           temperature: 0.6,
-          maxTokens: 1600,
+          maxTokens: 1800,
         });
-        generated = this.parseTopicLesson(reply);
+        generated = this.parseTopicLesson(reply, cleanTopic);
         break;
       } catch (error) {
         lastError = error;
@@ -221,14 +279,6 @@ export class QuizService {
     }
 
     const maxOrder = await this.prisma.lesson.aggregate({ _max: { order: true } });
-    
-    console.log("current user", user.id, user.email, user.role);
-
-    const existingUser = await this.prisma.user.findUnique({
-      where: { id: user.id },
-    });
-
-    console.log("existingUser", existingUser);
     const lesson = await this.prisma.lesson.create({
       data: {
         title: generated.title,
@@ -236,11 +286,33 @@ export class QuizService {
         content: generated.content,
         order: (maxOrder._max.order ?? 0) + 1,
       },
-
     });
-    
+
     this.logger.log(`Generated lesson ${lesson.id} from topic "${cleanTopic}"`);
     return { lessonId: lesson.id, quizId: null, title: lesson.title };
+  }
+
+  async askLessonQuestion(
+    user: RequestUser,
+    lessonId: string,
+    message: string,
+    chatHistory = "",
+  ): Promise<LessonChatResult> {
+    const cleanMessage = message.trim();
+    if (!cleanMessage) throw new BadRequestException("กรุณาระบุคำถาม");
+
+    const lesson = await this.prisma.lesson.findUnique({ where: { id: lessonId } });
+    if (!lesson) throw new NotFoundException("ไม่พบบทเรียนนี้");
+    if (user.role !== "ADMIN" && lesson.createdByUserId !== user.id) {
+      throw new NotFoundException("ไม่พบบทเรียนนี้");
+    }
+
+    const answer = await this.aiService.chat(this.buildLessonChatMessages(lesson, cleanMessage, chatHistory), {
+      temperature: 0.4,
+      maxTokens: 700,
+    });
+
+    return { answer: answer.trim() };
   }
 
   async generateQuizFromLesson(
@@ -253,6 +325,7 @@ export class QuizService {
     if (user.role !== "ADMIN" && lesson.createdByUserId !== user.id) {
       throw new NotFoundException("ไม่พบบทเรียนนี้");
     }
+    await this.ensureCurrentUserExists(user);
     if (lesson.content.trim().length < MIN_CONTENT_LENGTH) {
       throw new BadRequestException("เนื้อหาบทเรียนนี้สั้นเกินไปสำหรับสร้างแบบทดสอบ");
     }
@@ -261,10 +334,10 @@ export class QuizService {
     let lastError: unknown;
     for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
       try {
-        const reply = await this.aiService.chat(
-          this.buildLessonQuizMessages(lesson, additionalPrompt),
-          { temperature: 0.4, maxTokens: 1400 },
-        );
+        const reply = await this.aiService.chat(this.buildLessonQuizMessages(lesson, additionalPrompt), {
+          temperature: 0.4,
+          maxTokens: 1400,
+        });
         questions = this.parseQuestions(reply);
         if (questions.length > 0) break;
       } catch (error) {
