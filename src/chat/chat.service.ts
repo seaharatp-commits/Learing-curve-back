@@ -7,8 +7,9 @@ import { sanitizeReply } from "./sanitize-reply.util";
 
 const SYSTEM_PROMPT =
   "คุณคือผู้ช่วย AI สำหรับระบบ Learning Curve ที่ช่วยตอบและแนะนำวิธีแก้ไขปัญหาให้ผู้ใช้งาน " +
-  "ตอบเป็นภาษาไทย สั้น กระชับ และนำไปปฏิบัติได้จริง " +
-  "ตอบเป็นข้อความล้วน ห้ามใช้ markdown หรือสัญลักษณ์จัดรูปแบบใด ๆ เช่น **, __, #, `, - นำหน้าหัวข้อ";
+  "ตอบเป็นภาษาไทยให้ชัดเจน อ่านง่าย และนำไปปฏิบัติได้จริง " +
+  "ใช้ย่อหน้าสั้น ๆ รายการลำดับเลข bullet points และตัวอย่างง่าย ๆ ได้เมื่อช่วยให้อ่านเข้าใจขึ้น " +
+  "ห้ามตอบเป็น raw JSON ห้ามแสดง object ดิบ และหลีกเลี่ยงการจัดรูปแบบที่รกหรืออ่านยาก";
 
 @Injectable()
 export class ChatService {
@@ -19,8 +20,33 @@ export class ChatService {
     private readonly aiService: AiService,
   ) {}
 
+  private summarizeKnowledgeFallback(content: string): string {
+    const cleanContent = content
+      .replace(/```(?:json|markdown|md)?/gi, "")
+      .replace(/```/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (cleanContent.length <= 500) return cleanContent;
+
+    const clipped = cleanContent.slice(0, 500);
+    const lastSentenceEnd = Math.max(
+      clipped.lastIndexOf("."),
+      clipped.lastIndexOf("!"),
+      clipped.lastIndexOf("?"),
+      clipped.lastIndexOf("。"),
+    );
+
+    return `${clipped.slice(0, lastSentenceEnd > 180 ? lastSentenceEnd + 1 : 500).trim()}...`;
+  }
+
   private fallbackReply(content: string, knowledge?: { title: string; content: string }): string {
-    if (knowledge) return `จากฐานความรู้ "${knowledge.title}": ${knowledge.content}`;
+    if (knowledge) {
+      return [
+        `ขออภัยค่ะ ตอนนี้ AI สร้างคำตอบแบบละเอียดไม่ได้ จึงสรุปจากฐานความรู้ "${knowledge.title}" แบบย่อให้ก่อนค่ะ`,
+        this.summarizeKnowledgeFallback(knowledge.content),
+        "หากต้องการรายละเอียดเพิ่มเติม กรุณาลองถามอีกครั้งค่ะ",
+      ].join("\n\n");
+    }
     return `คำตอบนี้ไม่ได้อ้างอิงจากฐานความรู้ที่แอดมินเพิ่มไว้โดยตรง แต่เป็นคำตอบจากความรู้ทั่วไปของ AI: รับทราบคำถาม "${content}" แล้วค่ะ`;
   }
 
@@ -39,7 +65,7 @@ export class ChatService {
       {
         role: "system",
         content: knowledge
-          ? `${SYSTEM_PROMPT}\n\nให้ใช้ข้อมูลจากฐานความรู้ที่ผู้ใช้เลือกเป็นบริบทหลักในการตอบ หากต้องเสริมจากความรู้ทั่วไปให้บอกให้ชัดว่าเป็นข้อมูลเพิ่มเติม\n\nข้อมูลจากฐานความรู้ — "${knowledge.title}": ${knowledge.content}`
+          ? `${SYSTEM_PROMPT}\n\nผู้ใช้เลือกฐานความรู้ "${knowledge.title}" เป็นแหล่งอ้างอิงหลักในการตอบคำถามนี้ ให้ยึดข้อมูลในฐานความรู้นี้เป็นหลักอย่างเคร่งครัด ห้ามเดา ห้ามแต่งรายละเอียด ขั้นตอน เงื่อนไข หรือข้อสรุปที่ไม่มีข้อมูลรองรับในฐานความรู้ หากฐานความรู้มีข้อมูลไม่พอ ให้บอกอย่างชัดเจนว่า "ฐานความรู้นี้ยังให้รายละเอียดไม่เพียงพอ" แล้วแนะนำว่าควรถามหรือเพิ่มข้อมูลอะไรต่อ ห้ามใส่ความรู้ทั่วไปเพิ่มเอง เว้นแต่คำถามของผู้ใช้ขอให้เสริมความรู้ทั่วไปอย่างชัดเจน และถ้าเสริม ต้องขึ้นหัวข้อว่า "ข้อมูลเพิ่มเติมนอกฐานความรู้:" ก่อนเสมอ ตอบโดยเรียบเรียงใหม่ให้อ่านง่าย ไม่ใช่คัดลอกเนื้อหาดิบทั้งก้อน\n\nข้อมูลจากฐานความรู้:\nชื่อ: ${knowledge.title}\nเนื้อหา:\n${knowledge.content}`
           : `${SYSTEM_PROMPT}\n\nคำถามนี้ไม่ได้เลือกข้อมูลจากฐานความรู้ที่แอดมินเพิ่มไว้ ให้ตอบจากความรู้ทั่วไปได้ แต่ต้องขึ้นต้นหรือระบุให้ชัดว่า "คำตอบนี้ไม่ได้อ้างอิงจากฐานความรู้ที่แอดมินเพิ่มไว้โดยตรง"`,
       },
       ...history.map((message): AiChatMessage => ({
