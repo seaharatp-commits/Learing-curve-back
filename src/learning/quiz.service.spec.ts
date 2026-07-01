@@ -222,7 +222,7 @@ describe("QuizService.askLessonQuestion", () => {
       expect.arrayContaining([
         expect.objectContaining({ content: expect.stringContaining("What next?") }),
       ]),
-      { temperature: 0.4, maxTokens: 700 },
+      { temperature: 0.5, maxTokens: 1000 },
     );
   });
 });
