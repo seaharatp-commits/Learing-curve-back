@@ -4,9 +4,10 @@ import { buildFingerprint, jaccardScore, sharedTokens } from "./text-similarity.
 import type { RecommendQueryDto } from "./dto/recommend-query.dto";
 import type { RecommendationResult } from "./recommendation.types";
 
-const MIN_CONFIDENCE = 0.05;
+const MIN_CONFIDENCE = 0.1;
 const SAME_CATEGORY_BOOST = 0.1;
 const MAX_RESULTS = 5;
+const PRIMARY_MATCH_BOOST = 0.08;
 
 @Injectable()
 export class RecommendationService {
@@ -21,8 +22,17 @@ export class RecommendationService {
     });
 
     const results: RecommendationResult[] = articles.map((article) => {
+      const keywords = Array.isArray(article.keywords) ? article.keywords : [];
+      const tags = Array.isArray(article.tags) ? article.tags : [];
+      const primaryFingerprint = buildFingerprint([
+        ...keywords,
+        ...tags,
+        article.title,
+        article.summary ?? "",
+      ]);
       const articleFingerprint = buildFingerprint([
-        ...article.keywords,
+        ...keywords,
+        ...tags,
         article.title,
         article.content,
         article.summary ?? "",
@@ -31,9 +41,17 @@ export class RecommendationService {
         article.resolution ?? "",
       ]);
       const matchedKeywords = sharedTokens(queryFingerprint, articleFingerprint);
+      const primaryMatches = sharedTokens(queryFingerprint, primaryFingerprint);
       const sameCategory = query.category ? article.category.name === query.category : false;
       const baseScore = jaccardScore(queryFingerprint, articleFingerprint);
-      const confidenceScore = Math.min(1, baseScore + (sameCategory ? SAME_CATEGORY_BOOST : 0));
+      const primaryScore = jaccardScore(queryFingerprint, primaryFingerprint);
+      const confidenceScore = Math.min(
+        1,
+        baseScore * 0.35 +
+          primaryScore * 0.65 +
+          (primaryMatches.length > 0 ? PRIMARY_MATCH_BOOST : 0) +
+          (sameCategory ? SAME_CATEGORY_BOOST : 0),
+      );
 
       const explanationParts = [
         matchedKeywords.length > 0

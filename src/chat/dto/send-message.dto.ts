@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MinLength } from "class-validator";
+import { IsNumber, IsOptional, IsString, Max, Min, MinLength } from "class-validator";
 
 export class SendMessageDto {
   @IsOptional()
@@ -8,6 +8,12 @@ export class SendMessageDto {
   @IsOptional()
   @IsString()
   knowledgeBaseArticleId?: string;
+
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  @IsOptional()
+  knowledgeBaseConfidenceScore?: number;
 
   @IsString()
   @MinLength(1)

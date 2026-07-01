@@ -65,6 +65,10 @@ model ChatMessage {
   sessionId String
   role      MessageRole
   content   String
+  sourceType String?
+  sourceArticleId String?
+  sourceArticleTitle String?
+  sourceConfidenceScore Float?
   createdAt DateTime    @default(now())
 
   session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)

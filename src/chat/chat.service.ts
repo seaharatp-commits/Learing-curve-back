@@ -81,7 +81,7 @@ export class ChatService {
     const knowledge = dto.knowledgeBaseArticleId
       ? await this.prisma.knowledgeBaseArticle.findUnique({
           where: { id: dto.knowledgeBaseArticleId },
-          select: { title: true, content: true },
+          select: { id: true, title: true, content: true },
         })
       : null;
 
@@ -96,7 +96,15 @@ export class ChatService {
     });
 
     const aiMessage = await this.prisma.chatMessage.create({
-      data: { sessionId: session.id, role: "ASSISTANT", content: aiContent },
+      data: {
+        sessionId: session.id,
+        role: "ASSISTANT",
+        content: aiContent,
+        sourceType: knowledge ? "KNOWLEDGE_BASE" : "GENERAL_AI",
+        sourceArticleId: knowledge?.id ?? null,
+        sourceArticleTitle: knowledge?.title ?? null,
+        sourceConfidenceScore: knowledge ? dto.knowledgeBaseConfidenceScore ?? null : null,
+      },
     });
 
     return { session, messages: [userMessage, aiMessage] };
