@@ -4,11 +4,13 @@ import { PrismaService } from "../prisma/prisma.service";
 type MockArticle = {
   id: string;
   title: string;
+  content: string;
   summary: string | null;
   resolution: string | null;
   symptoms: string | null;
   rootCause: string | null;
   keywords: string[];
+  tags: string[];
   category: { name: string };
 };
 
@@ -16,11 +18,13 @@ function makeArticle(overrides: Partial<MockArticle>): MockArticle {
   return {
     id: "id-1",
     title: "",
+    content: "",
     summary: null,
     resolution: null,
     symptoms: null,
     rootCause: null,
     keywords: [],
+    tags: [],
     category: { name: "ทั่วไป" },
     ...overrides,
   };
@@ -129,5 +133,43 @@ describe("RecommendationService", () => {
     expect(result.length).toBeLessThanOrEqual(5);
     const scores = result.map((r) => r.confidenceScore);
     expect(scores).toEqual([...scores].sort((a, b) => b - a));
+  });
+
+  it("prefers title keywords and tags over a weak content-only match", async () => {
+    prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
+      makeArticle({
+        id: "kb-content-only",
+        title: "วิธีตั้งค่าทั่วไป",
+        content: "เอกสารนี้กล่าวถึง workflow แบบกว้าง ๆ แต่ไม่ได้เกี่ยวกับ merge workflow โดยตรง",
+      }),
+      makeArticle({
+        id: "kb-primary",
+        title: "Merge workflow method A",
+        keywords: ["merge", "workflow"],
+        tags: ["method-a"],
+        summary: "ขั้นตอนสำหรับ merge workflow method A",
+      }),
+    ]);
+
+    const result = await service.recommend({ title: "ขั้นตอน merge workflow method A" });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].articleId).toBe("kb-primary");
+    expect(result[0].confidenceScore).toBeGreaterThanOrEqual(0.1);
+  });
+
+  it("does not show weak matches that only come from long content", async () => {
+    prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
+      makeArticle({
+        id: "kb-weak",
+        title: "ตั้งค่าระบบทั่วไป",
+        content:
+          "บทความยาวที่กล่าวถึงคำทั่วไปจำนวนมาก เช่น workflow และขั้นตอน แต่ไม่มีชื่อเรื่องหรือ keyword ที่ตรงกับคำถามเฉพาะ",
+      }),
+    ]);
+
+    const result = await service.recommend({ title: "merge workflow platform x" });
+
+    expect(result).toEqual([]);
   });
 });
