@@ -85,6 +85,7 @@ export class QuizService {
           "Use a natural, warm, easy-to-read teaching style. Avoid robotic, overly brief, or overly formal wording. " +
           "Follow the learner's requested response style in the latest message. If they ask for a short answer, keep it concise. If they ask for bullets, examples, comparison, beginner-friendly language, or a simpler explanation, use that format. " +
           "If the learner explains their own understanding or asks whether their understanding is correct, first check it directly, then clarify what is correct, what needs adjustment, and why. " +
+          "Return a clean learner-facing answer, not JSON. If a title helps, write it as a short Markdown heading, then write the explanation as readable Markdown/text. Never output raw objects like { title, content }. " +
           "When adding information beyond the lesson content, clearly label that part in Thai as 'คำอธิบายเพิ่มเติม:' or 'บริบทเพิ่มเติม:'. " +
           "Do not answer questions that are unrelated or too far from the lesson; briefly say in Thai that the question is outside this lesson and invite the learner to ask something connected to the topic. " +
           "If answering in Thai, use a polite, warm feminine tone and end sentences naturally with 'ค่ะ' where appropriate.",
@@ -96,6 +97,7 @@ export class QuizService {
           "ให้อ่านประวัติการคุยก่อนหน้าเพื่อเข้าใจบริบทต่อเนื่อง โดยเฉพาะคำถามต่อเนื่องที่อ้างถึงคำตอบก่อนหน้า ความเข้าใจของผู้เรียน หรือสิ่งที่ผู้เรียนเพิ่งถามไป " +
           "ถ้าคำตอบอยู่ในบทเรียน ให้สรุปและอธิบายจากบทเรียนให้ชัดเจน ถ้าบทเรียนยังไม่พอแต่คำถามยังเกี่ยวข้องกัน ให้เสริมความรู้ทั่วไปที่ถูกต้องพร้อมระบุว่าเป็นคำอธิบายเพิ่มเติม " +
           "ถ้าผู้เรียนบอกความเข้าใจของตัวเอง ให้ตรวจว่าเข้าใจถูกไหมก่อน แล้วค่อยแก้ไขหรือเติมส่วนที่ขาด ถ้าผู้เรียนขอคำตอบสั้น ๆ อธิบายง่าย ๆ bullet ตัวอย่าง หรือการเปรียบเทียบ ให้ทำตามรูปแบบที่ผู้เรียนขอ " +
+          "ห้ามตอบเป็น JSON ดิบ ถ้าต้องมีหัวข้อให้ใช้ Markdown heading สั้น ๆ แล้วตามด้วยคำอธิบายที่อ่านง่าย " +
           "จัดคำตอบให้อ่านง่ายด้วยย่อหน้าสั้น ๆ bullet เมื่อเหมาะสม และตัวอย่างง่าย ๆ เมื่อช่วยให้เข้าใจขึ้น " +
           "ตอบให้ครบประเด็น ไม่สั้นจนขาดสาระ และไม่ยาวจนล้นหรือซ้ำไปมา ใช้น้ำเสียงสุภาพ อบอุ่น เป็นกันเองแบบผู้ช่วยสอนผู้หญิง และลงท้ายด้วยค่ะอย่างเป็นธรรมชาติ",
       },
@@ -109,6 +111,28 @@ export class QuizService {
           `\n\nLatest learner message:\n${message.trim()}\n\nYour task: answer the latest learner message using the lesson, the relevant previous conversation, and the learner's requested answer style.`,
       },
     ];
+  }
+
+  private normalizeLessonChatAnswer(raw: string): string {
+    const cleaned = raw
+      .replace(/```(?:json|markdown|md)?/gi, "")
+      .replace(/```/g, "")
+      .trim();
+
+    if (!cleaned.startsWith("{") || !cleaned.endsWith("}")) {
+      return raw.trim();
+    }
+
+    try {
+      const parsed = JSON.parse(cleaned) as { title?: unknown; content?: unknown };
+      const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
+      const content = typeof parsed.content === "string" ? parsed.content.trim() : "";
+
+      if (!title && !content) return raw.trim();
+      return [title ? `## ${title}` : "", content].filter(Boolean).join("\n\n");
+    } catch {
+      return raw.trim();
+    }
   }
 
   private buildLessonQuizMessages(
@@ -322,7 +346,7 @@ export class QuizService {
       maxTokens: 1000,
     });
 
-    return { answer: answer.trim() };
+    return { answer: this.normalizeLessonChatAnswer(answer) };
   }
 
   async generateQuizFromLesson(

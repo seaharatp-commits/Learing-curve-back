@@ -225,6 +225,28 @@ describe("QuizService.askLessonQuestion", () => {
       { temperature: 0.5, maxTokens: 1000 },
     );
   });
+
+  it("normalizes a JSON-shaped lesson chat answer before returning it to the UI", async () => {
+    const { service, prisma, aiService } = makeService();
+    prisma.lesson.findUnique.mockResolvedValue({
+      id: "lesson-1",
+      title: "Lesson 1",
+      content: "Lesson content",
+      createdByUserId: "user-1",
+    });
+    aiService.chat.mockResolvedValue(
+      JSON.stringify({
+        title: "สรุปแบบเข้าใจง่าย",
+        content: "เนื้อหาคำตอบที่ผู้เรียนควรเห็นค่ะ",
+      }),
+    );
+
+    const result = await service.askLessonQuestion(user, "lesson-1", "Explain simply");
+
+    expect(result).toEqual({
+      answer: "## สรุปแบบเข้าใจง่าย\n\nเนื้อหาคำตอบที่ผู้เรียนควรเห็นค่ะ",
+    });
+  });
 });
 
 describe("QuizService.generateQuizFromLesson", () => {
