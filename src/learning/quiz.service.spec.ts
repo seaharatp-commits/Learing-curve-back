@@ -335,7 +335,7 @@ describe("QuizService.submitAttempt", () => {
     );
   });
 
-  it("scores answers correctly and ignores answers for unknown question ids", async () => {
+  it("scores answers correctly when every quiz question has one valid answer", async () => {
     const { service, prisma } = makeService();
     prisma.quiz.findUnique.mockResolvedValue({
       id: "quiz-1",
@@ -351,7 +351,6 @@ describe("QuizService.submitAttempt", () => {
       answers: [
         { questionId: "q1", selectedIndex: 1 }, // correct
         { questionId: "q2", selectedIndex: 2 }, // wrong
-        { questionId: "q-unknown", selectedIndex: 0 }, // ignored: not a real question
       ],
     });
 
@@ -364,7 +363,23 @@ describe("QuizService.submitAttempt", () => {
     });
   });
 
-  it("rejects a submission where every answer is invalid instead of saving a fake zero score", async () => {
+  it("rejects answers for question ids that do not belong to this quiz", async () => {
+    const { service, prisma } = makeService();
+    prisma.quiz.findUnique.mockResolvedValue({
+      id: "quiz-1",
+      createdByUserId: "user-1",
+      questions: [{ id: "q1", correctIndex: 1, explanation: "exp1", options: ["a", "b", "c", "d"] }],
+    });
+
+    await expect(
+      service.submitAttempt(user, "quiz-1", {
+        answers: [{ questionId: "q-unknown", selectedIndex: 0 }],
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(prisma.quizAttempt.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects duplicate answers for the same question", async () => {
     const { service, prisma } = makeService();
     prisma.quiz.findUnique.mockResolvedValue({
       id: "quiz-1",
@@ -375,9 +390,44 @@ describe("QuizService.submitAttempt", () => {
     await expect(
       service.submitAttempt(user, "quiz-1", {
         answers: [
-          { questionId: "q-unknown", selectedIndex: 0 }, // not a real question
-          { questionId: "q1", selectedIndex: 9 }, // out of range for this question's options
+          { questionId: "q1", selectedIndex: 1 },
+          { questionId: "q1", selectedIndex: 2 },
         ],
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(prisma.quizAttempt.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects incomplete submissions", async () => {
+    const { service, prisma } = makeService();
+    prisma.quiz.findUnique.mockResolvedValue({
+      id: "quiz-1",
+      createdByUserId: "user-1",
+      questions: [
+        { id: "q1", correctIndex: 1, explanation: "exp1", options: ["a", "b", "c", "d"] },
+        { id: "q2", correctIndex: 0, explanation: "exp2", options: ["a", "b", "c", "d"] },
+      ],
+    });
+
+    await expect(
+      service.submitAttempt(user, "quiz-1", {
+        answers: [{ questionId: "q1", selectedIndex: 1 }],
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(prisma.quizAttempt.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects selectedIndex values outside the question options", async () => {
+    const { service, prisma } = makeService();
+    prisma.quiz.findUnique.mockResolvedValue({
+      id: "quiz-1",
+      createdByUserId: "user-1",
+      questions: [{ id: "q1", correctIndex: 1, explanation: "exp1", options: ["a", "b", "c", "d"] }],
+    });
+
+    await expect(
+      service.submitAttempt(user, "quiz-1", {
+        answers: [{ questionId: "q1", selectedIndex: 9 }],
       }),
     ).rejects.toThrow(BadRequestException);
     expect(prisma.quizAttempt.create).not.toHaveBeenCalled();

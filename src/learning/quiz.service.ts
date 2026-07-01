@@ -493,28 +493,48 @@ export class QuizService {
     }
     if (quiz.questions.length === 0) throw new BadRequestException("แบบทดสอบนี้ยังไม่มีคำถาม");
 
-    const questionById = new Map(quiz.questions.map((q) => [q.id, q]));
-    const answers: AnswerResult[] = dto.answers
-      .filter((answer) => {
-        const question = questionById.get(answer.questionId);
-        return !!question && answer.selectedIndex < question.options.length;
-      })
-      .map((answer) => {
-        const question = questionById.get(answer.questionId)!;
-        return {
-          questionId: answer.questionId,
-          selectedIndex: answer.selectedIndex,
-          correctIndex: question.correctIndex,
-          isCorrect: answer.selectedIndex === question.correctIndex,
-          explanation: question.explanation,
-        };
-      });
-
-    if (answers.length === 0) {
-      throw new BadRequestException(
-        "คำตอบที่ส่งมาไม่ถูกต้องหรือไม่ตรงกับแบบทดสอบนี้ กรุณาลองทำแบบทดสอบใหม่อีกครั้ง",
-      );
+    if (!Array.isArray(dto.answers) || dto.answers.length === 0) {
+      throw new BadRequestException("กรุณาตอบคำถามให้ครบทุกข้อก่อนส่งแบบทดสอบ");
     }
+
+    const questionById = new Map(quiz.questions.map((q) => [q.id, q]));
+    const seenQuestionIds = new Set<string>();
+
+    for (const answer of dto.answers) {
+      const question = questionById.get(answer.questionId);
+      if (!question) {
+        throw new BadRequestException(
+          "คำตอบที่ส่งมาไม่ตรงกับแบบทดสอบนี้ กรุณาลองทำแบบทดสอบใหม่อีกครั้ง",
+        );
+      }
+
+      if (seenQuestionIds.has(answer.questionId)) {
+        throw new BadRequestException("พบคำตอบซ้ำในคำถามเดียวกัน กรุณาลองทำแบบทดสอบใหม่อีกครั้ง");
+      }
+
+      seenQuestionIds.add(answer.questionId);
+
+      if (answer.selectedIndex < 0 || answer.selectedIndex >= question.options.length) {
+        throw new BadRequestException(
+          "ตัวเลือกคำตอบไม่ถูกต้อง กรุณาลองทำแบบทดสอบใหม่อีกครั้ง",
+        );
+      }
+    }
+
+    if (seenQuestionIds.size !== quiz.questions.length) {
+      throw new BadRequestException("กรุณาตอบคำถามให้ครบทุกข้อก่อนส่งแบบทดสอบ");
+    }
+
+    const answers: AnswerResult[] = dto.answers.map((answer) => {
+      const question = questionById.get(answer.questionId)!;
+      return {
+        questionId: answer.questionId,
+        selectedIndex: answer.selectedIndex,
+        correctIndex: question.correctIndex,
+        isCorrect: answer.selectedIndex === question.correctIndex,
+        explanation: question.explanation,
+      };
+    });
 
     const correctCount = answers.filter((a) => a.isCorrect).length;
     const score = Math.round((correctCount / quiz.questions.length) * 100);
