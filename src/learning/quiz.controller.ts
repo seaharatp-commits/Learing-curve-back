@@ -6,7 +6,6 @@ import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import type { RequestUser } from "../auth/strategies/jwt.strategy";
 import { QuizService } from "./quiz.service";
 import { GenerateQuizDto } from "./dto/generate-quiz.dto";
-import { GenerateTopicDto } from "./dto/generate-topic.dto";
 import { SubmitAttemptDto } from "./dto/submit-attempt.dto";
 
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -18,11 +17,6 @@ export class QuizController {
   @Post("generate-from-article")
   generate(@CurrentUser() user: RequestUser, @Body() dto: GenerateQuizDto) {
     return this.quizService.generateFromArticle(user, dto.articleId);
-  }
-
-  @Post("generate-from-topic")
-  generateFromTopic(@CurrentUser() user: RequestUser, @Body() dto: GenerateTopicDto) {
-    return this.quizService.generateFromTopic(user, dto.topic);
   }
 
   @Get()

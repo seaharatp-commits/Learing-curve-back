@@ -203,15 +203,37 @@ export class QuizService {
     return this.normalizeQuestions(parsed.questions);
   }
 
+  // AI responses sometimes double-encode the lesson: the "content" field is
+  // itself a JSON string like {"title": ..., "content": "actual text"}
+  // instead of plain prose. Unwrap one level so raw JSON never lands in the
+  // saved lesson content.
+  private normalizeLessonContent(value: string): string {
+    const stripFences = (text: string) =>
+      text
+        .replace(/```(?:json)?/gi, "")
+        .replace(/```/g, "")
+        .trim();
+
+    const text = stripFences(value);
+    if (/^\{[\s\S]*\}$/.test(text)) {
+      try {
+        const inner = JSON.parse(text) as Record<string, unknown>;
+        if (typeof inner.content === "string" && inner.content.trim()) {
+          return stripFences(inner.content);
+        }
+      } catch {
+        // not valid JSON after all, fall through and keep the stripped text
+      }
+    }
+    return text;
+  }
+
   private parseTopicLesson(raw: string, fallbackTitle: string): GeneratedTopicLesson {
     let parsed: Record<string, unknown> | null = null;
     try {
       parsed = this.parseJsonObject(raw);
     } catch {
-      const content = raw
-        .replace(/```(?:json)?/gi, "")
-        .replace(/```/g, "")
-        .trim();
+      const content = this.normalizeLessonContent(raw);
       if (content.length >= MIN_CONTENT_LENGTH) {
         return { title: fallbackTitle, content };
       }
@@ -222,7 +244,8 @@ export class QuizService {
       typeof parsed.title === "string" && parsed.title.trim()
         ? parsed.title.trim()
         : fallbackTitle;
-    const content = typeof parsed.content === "string" ? parsed.content.trim() : "";
+    const content =
+      typeof parsed.content === "string" ? this.normalizeLessonContent(parsed.content) : "";
 
     if (!title || !content) {
       throw new Error("AI response did not contain a usable lesson");
@@ -472,7 +495,10 @@ export class QuizService {
 
     const questionById = new Map(quiz.questions.map((q) => [q.id, q]));
     const answers: AnswerResult[] = dto.answers
-      .filter((answer) => questionById.has(answer.questionId))
+      .filter((answer) => {
+        const question = questionById.get(answer.questionId);
+        return !!question && answer.selectedIndex < question.options.length;
+      })
       .map((answer) => {
         const question = questionById.get(answer.questionId)!;
         return {
@@ -483,6 +509,12 @@ export class QuizService {
           explanation: question.explanation,
         };
       });
+
+    if (answers.length === 0) {
+      throw new BadRequestException(
+        "คำตอบที่ส่งมาไม่ถูกต้องหรือไม่ตรงกับแบบทดสอบนี้ กรุณาลองทำแบบทดสอบใหม่อีกครั้ง",
+      );
+    }
 
     const correctCount = answers.filter((a) => a.isCorrect).length;
     const score = Math.round((correctCount / quiz.questions.length) * 100);

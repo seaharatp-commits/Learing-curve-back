@@ -202,6 +202,35 @@ describe("QuizService.generateFromTopic", () => {
       },
     });
   });
+
+  it("unwraps a double-encoded JSON content field instead of saving raw JSON", async () => {
+    const { service, prisma, aiService } = makeService();
+    aiService.chat.mockResolvedValue(
+      JSON.stringify({
+        title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
+        content: JSON.stringify({
+          title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
+          content: "รหัสผ่านที่ดีควรเดายากและไม่ใช้ซ้ำ\n\nควรใช้ตัวจัดการรหัสผ่านเมื่อต้องจำหลายบัญชี",
+        }),
+      }),
+    );
+    prisma.lesson.aggregate.mockResolvedValue({ _max: { order: 4 } });
+    prisma.lesson.create.mockResolvedValue({
+      id: "lesson-1",
+      title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
+    });
+
+    await service.generateFromTopic(user, "รหัสผ่านปลอดภัย");
+
+    expect(prisma.lesson.create).toHaveBeenCalledWith({
+      data: {
+        title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
+        createdByUserId: "user-1",
+        content: "รหัสผ่านที่ดีควรเดายากและไม่ใช้ซ้ำ\n\nควรใช้ตัวจัดการรหัสผ่านเมื่อต้องจำหลายบัญชี",
+        order: 5,
+      },
+    });
+  });
 });
 
 describe("QuizService.askLessonQuestion", () => {
@@ -312,8 +341,8 @@ describe("QuizService.submitAttempt", () => {
       id: "quiz-1",
       createdByUserId: "user-1",
       questions: [
-        { id: "q1", correctIndex: 1, explanation: "exp1" },
-        { id: "q2", correctIndex: 0, explanation: "exp2" },
+        { id: "q1", correctIndex: 1, explanation: "exp1", options: ["a", "b", "c", "d"] },
+        { id: "q2", correctIndex: 0, explanation: "exp2", options: ["a", "b", "c", "d"] },
       ],
     });
     prisma.quizAttempt.create.mockResolvedValue({ id: "attempt-1" });
@@ -322,7 +351,7 @@ describe("QuizService.submitAttempt", () => {
       answers: [
         { questionId: "q1", selectedIndex: 1 }, // correct
         { questionId: "q2", selectedIndex: 2 }, // wrong
-        { questionId: "q-unknown", selectedIndex: 0 }, // ignored
+        { questionId: "q-unknown", selectedIndex: 0 }, // ignored: not a real question
       ],
     });
 
@@ -333,6 +362,25 @@ describe("QuizService.submitAttempt", () => {
     expect(prisma.quizAttempt.create).toHaveBeenCalledWith({
       data: { userId: "user-1", quizId: "quiz-1", score: 50 },
     });
+  });
+
+  it("rejects a submission where every answer is invalid instead of saving a fake zero score", async () => {
+    const { service, prisma } = makeService();
+    prisma.quiz.findUnique.mockResolvedValue({
+      id: "quiz-1",
+      createdByUserId: "user-1",
+      questions: [{ id: "q1", correctIndex: 1, explanation: "exp1", options: ["a", "b", "c", "d"] }],
+    });
+
+    await expect(
+      service.submitAttempt(user, "quiz-1", {
+        answers: [
+          { questionId: "q-unknown", selectedIndex: 0 }, // not a real question
+          { questionId: "q1", selectedIndex: 9 }, // out of range for this question's options
+        ],
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(prisma.quizAttempt.create).not.toHaveBeenCalled();
   });
 });
 
