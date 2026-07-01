@@ -5,6 +5,10 @@ export class SendMessageDto {
   @IsString()
   sessionId?: string;
 
+  @IsOptional()
+  @IsString()
+  knowledgeBaseArticleId?: string;
+
   @IsString()
   @MinLength(1)
   content!: string;

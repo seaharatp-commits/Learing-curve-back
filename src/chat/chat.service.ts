@@ -19,23 +19,16 @@ export class ChatService {
     private readonly aiService: AiService,
   ) {}
 
-  private async findRelevantKnowledge(content: string) {
-    const lower = content.toLowerCase();
-    const articles = await this.prisma.knowledgeBaseArticle.findMany();
-    return articles.find(
-      (article) =>
-        lower.includes(article.title.toLowerCase()) || article.content.toLowerCase().includes(lower),
-    );
-  }
-
   private fallbackReply(content: string, knowledge?: { title: string; content: string }): string {
     if (knowledge) return `จากฐานความรู้ "${knowledge.title}": ${knowledge.content}`;
-    return `รับทราบปัญหาของคุณแล้วครับ/ค่ะ: "${content}" — ทีม AI กำลังวิเคราะห์และจะแนะนำวิธีแก้ไขให้เร็วที่สุด`;
+    return `คำตอบนี้ไม่ได้อ้างอิงจากฐานความรู้ที่แอดมินเพิ่มไว้โดยตรง แต่เป็นคำตอบจากความรู้ทั่วไปของ AI: รับทราบคำถาม "${content}" แล้วค่ะ`;
   }
 
-  private async generateAiReply(sessionId: string, content: string): Promise<string> {
-    const knowledge = await this.findRelevantKnowledge(content);
-
+  private async generateAiReply(
+    sessionId: string,
+    content: string,
+    knowledge?: { title: string; content: string },
+  ): Promise<string> {
     const history = await this.prisma.chatMessage.findMany({
       where: { sessionId },
       orderBy: { createdAt: "asc" },
@@ -46,8 +39,8 @@ export class ChatService {
       {
         role: "system",
         content: knowledge
-          ? `${SYSTEM_PROMPT}\n\nข้อมูลอ้างอิงจากฐานความรู้ที่เกี่ยวข้อง — "${knowledge.title}": ${knowledge.content}`
-          : SYSTEM_PROMPT,
+          ? `${SYSTEM_PROMPT}\n\nให้ใช้ข้อมูลจากฐานความรู้ที่ผู้ใช้เลือกเป็นบริบทหลักในการตอบ หากต้องเสริมจากความรู้ทั่วไปให้บอกให้ชัดว่าเป็นข้อมูลเพิ่มเติม\n\nข้อมูลจากฐานความรู้ — "${knowledge.title}": ${knowledge.content}`
+          : `${SYSTEM_PROMPT}\n\nคำถามนี้ไม่ได้เลือกข้อมูลจากฐานความรู้ที่แอดมินเพิ่มไว้ ให้ตอบจากความรู้ทั่วไปได้ แต่ต้องขึ้นต้นหรือระบุให้ชัดว่า "คำตอบนี้ไม่ได้อ้างอิงจากฐานความรู้ที่แอดมินเพิ่มไว้โดยตรง"`,
       },
       ...history.map((message): AiChatMessage => ({
         role: message.role === "USER" ? "user" : "assistant",
@@ -85,7 +78,18 @@ export class ChatService {
       });
     }
 
-    const aiContent = await this.generateAiReply(session.id, dto.content);
+    const knowledge = dto.knowledgeBaseArticleId
+      ? await this.prisma.knowledgeBaseArticle.findUnique({
+          where: { id: dto.knowledgeBaseArticleId },
+          select: { title: true, content: true },
+        })
+      : null;
+
+    if (dto.knowledgeBaseArticleId && !knowledge) {
+      throw new NotFoundException("ไม่พบข้อมูลฐานความรู้ที่เลือก");
+    }
+
+    const aiContent = await this.generateAiReply(session.id, dto.content, knowledge ?? undefined);
 
     const userMessage = await this.prisma.chatMessage.create({
       data: { sessionId: session.id, role: "USER", content: dto.content },

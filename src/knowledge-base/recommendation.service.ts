@@ -24,8 +24,11 @@ export class RecommendationService {
       const articleFingerprint = buildFingerprint([
         ...article.keywords,
         article.title,
+        article.content,
+        article.summary ?? "",
         article.symptoms ?? "",
         article.rootCause ?? "",
+        article.resolution ?? "",
       ]);
       const matchedKeywords = sharedTokens(queryFingerprint, articleFingerprint);
       const sameCategory = query.category ? article.category.name === query.category : false;
@@ -43,6 +46,7 @@ export class RecommendationService {
         articleId: article.id,
         title: article.title,
         category: article.category.name,
+        preview: (article.summary ?? article.resolution ?? article.content ?? "").slice(0, 180),
         summary: article.summary,
         resolution: article.resolution,
         confidenceScore: Math.round(confidenceScore * 100) / 100,
