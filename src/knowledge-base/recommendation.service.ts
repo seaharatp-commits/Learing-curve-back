@@ -31,6 +31,14 @@ const GENERIC_TOKENS = new Set([
   "ข้อมูล",
   "ใช้งาน",
   "ไม่ได้",
+  "อยากรู้",
+  "ช่วย",
+  "บอก",
+  "เกี่ยวกับ",
+  "ขอ",
+  "หน่อย",
+  "อธิบาย",
+  "คืออะไร",
 ]);
 
 function withoutGenericTokens(tokens: Set<string>) {
@@ -54,8 +62,8 @@ export class RecommendationService {
     const queryFingerprint = buildFingerprint([query.title, query.description ?? ""]);
     if (queryFingerprint.size === 0) return [];
     const importantQueryFingerprint = withoutGenericTokens(queryFingerprint);
-    const scoreQueryFingerprint =
-      importantQueryFingerprint.size > 0 ? importantQueryFingerprint : queryFingerprint;
+    if (importantQueryFingerprint.size === 0) return [];
+    const scoreQueryFingerprint = importantQueryFingerprint;
     const normalizedQuery = [query.title, query.description ?? ""].join(" ").toLowerCase();
 
     const articles = await this.prisma.knowledgeBaseArticle.findMany({

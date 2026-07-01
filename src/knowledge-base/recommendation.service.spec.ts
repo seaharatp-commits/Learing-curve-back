@@ -108,13 +108,13 @@ describe("RecommendationService", () => {
     prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
       makeArticle({
         id: "kb-1",
-        title: "ปัญหา A",
-        keywords: ["ปัญหา"],
+        title: "Module Alpha",
+        keywords: ["module", "alpha"],
         category: { name: "หมวด A" },
       }),
     ]);
 
-    const [result] = await service.recommend({ title: "ปัญหา A", category: "หมวด A" });
+    const [result] = await service.recommend({ title: "module alpha", category: "หมวด A" });
     expect(result.confidenceScore).toBeLessThanOrEqual(1);
   });
 
@@ -171,5 +171,20 @@ describe("RecommendationService", () => {
     const result = await service.recommend({ title: "merge workflow platform x" });
 
     expect(result).toEqual([]);
+  });
+
+  it("ignores generic Thai filler words when there are no specific terms", async () => {
+    prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
+      makeArticle({
+        id: "kb-generic",
+        title: "ข้อมูลการใช้งานระบบทั่วไป",
+        keywords: ["ข้อมูล", "ระบบ", "ใช้งาน"],
+      }),
+    ]);
+
+    const result = await service.recommend({ title: "ช่วย บอก เกี่ยวกับ ระบบ หน่อย" });
+
+    expect(result).toEqual([]);
+    expect(prisma.knowledgeBaseArticle.findMany).not.toHaveBeenCalled();
   });
 });
