@@ -63,11 +63,13 @@ export class LearningService {
 
   async getLesson(user: RequestUser, lessonId: string): Promise<LessonDetail> {
     const userId = user.id;
+    const quizScope = user.role === "ADMIN" ? undefined : { createdByUserId: userId };
     const lesson = await this.prisma.lesson.findUnique({
       where: { id: lessonId },
       include: {
         progress: { where: { userId } },
         quizzes: {
+          where: quizScope,
           orderBy: { createdAt: "desc" },
           include: { _count: { select: { questions: true } } },
         },

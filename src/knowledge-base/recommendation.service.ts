@@ -54,6 +54,42 @@ function uniqueTokens(tokens: string[]) {
   return [...new Set(tokens)];
 }
 
+function buildRecommendationSearchFields(article: {
+  title: string;
+  content: string;
+  keywords: unknown;
+  tags: unknown;
+  summary: string | null;
+  symptoms: string | null;
+  rootCause: string | null;
+  resolution: string | null;
+}) {
+  const keywords = Array.isArray(article.keywords) ? article.keywords : [];
+  const tags = Array.isArray(article.tags) ? article.tags : [];
+
+  return {
+    keywords,
+    tags,
+    primaryParts: [...keywords, ...tags, article.title, article.summary ?? ""],
+    contentParts: [
+      article.content,
+      article.symptoms ?? "",
+      article.rootCause ?? "",
+      article.resolution ?? "",
+    ],
+    // Future semantic-search foundation: this is the compact text that can be embedded later.
+    semanticSeedText: [
+      article.title,
+      ...keywords,
+      ...tags,
+      article.summary ?? "",
+      article.symptoms ?? "",
+      article.rootCause ?? "",
+      article.resolution ?? "",
+    ].join("\n"),
+  };
+}
+
 @Injectable()
 export class RecommendationService {
   constructor(private readonly prisma: PrismaService) {}
@@ -71,27 +107,16 @@ export class RecommendationService {
     });
 
     const results: RecommendationResult[] = articles.map((article) => {
-      const keywords = Array.isArray(article.keywords) ? article.keywords : [];
-      const tags = Array.isArray(article.tags) ? article.tags : [];
+      const searchFields = buildRecommendationSearchFields(article);
       const titleFingerprint = buildFingerprint([article.title]);
-      const keywordFingerprint = buildFingerprint(keywords);
-      const tagFingerprint = buildFingerprint(tags);
+      const keywordFingerprint = buildFingerprint(searchFields.keywords);
+      const tagFingerprint = buildFingerprint(searchFields.tags);
       const summaryFingerprint = buildFingerprint([article.summary ?? ""]);
-      const contentFingerprint = buildFingerprint([
-        article.content,
-        article.symptoms ?? "",
-        article.rootCause ?? "",
-        article.resolution ?? "",
-      ]);
-      const primaryFingerprint = buildFingerprint([
-        ...keywords,
-        ...tags,
-        article.title,
-        article.summary ?? "",
-      ]);
+      const contentFingerprint = buildFingerprint(searchFields.contentParts);
+      const primaryFingerprint = buildFingerprint(searchFields.primaryParts);
       const articleFingerprint = buildFingerprint([
-        ...keywords,
-        ...tags,
+        ...searchFields.primaryParts,
+        searchFields.semanticSeedText,
         article.title,
         article.content,
         article.summary ?? "",

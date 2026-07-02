@@ -144,6 +144,7 @@ describe("LearningService.getLesson", () => {
       include: {
         progress: { where: { userId: "user-1" } },
         quizzes: {
+          where: { createdByUserId: "user-1" },
           orderBy: { createdAt: "desc" },
           include: { _count: { select: { questions: true } } },
         },

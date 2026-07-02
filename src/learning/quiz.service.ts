@@ -26,6 +26,8 @@ import type {
 const QUESTIONS_PER_QUIZ = 5;
 const MAX_GENERATION_ATTEMPTS = 3;
 const MIN_CONTENT_LENGTH = 50;
+const MAX_LESSON_QUIZ_CONTENT_LENGTH = 6000;
+const MAX_LESSON_QUIZ_FOCUS_LENGTH = 1200;
 
 const QUIZ_SYSTEM_PROMPT =
   "คุณคือผู้ช่วยสร้างแบบทดสอบปรนัยจากเนื้อหาความรู้ที่ให้มาเท่านั้น " +
@@ -160,7 +162,8 @@ export class QuizService {
     lesson: { title: string; content: string },
     additionalPrompt: string,
   ): AiChatMessage[] {
-    const focus = additionalPrompt.trim();
+    const lessonContent = this.limitText(lesson.content, MAX_LESSON_QUIZ_CONTENT_LENGTH);
+    const focus = this.limitText(additionalPrompt, MAX_LESSON_QUIZ_FOCUS_LENGTH);
     return [
       {
         role: "system",
@@ -171,13 +174,19 @@ export class QuizService {
       {
         role: "user",
         content:
-          `Lesson title: ${lesson.title}\n\nVerified lesson content - use this as the factual source:\n${lesson.content}` +
+          `Lesson title: ${lesson.title}\n\nVerified lesson content - use this as the factual source:\n${lessonContent}` +
           (focus
             ? `\n\nLearner chat context - use only as focus or emphasis, not as a factual source:\n${focus}`
             : "") +
           "\n\nCreate quiz questions only when the answer can be supported by the verified lesson content above.",
       },
     ];
+  }
+
+  private limitText(value: string, maxLength: number): string {
+    const cleanValue = value.replace(/\s+/g, " ").trim();
+    if (cleanValue.length <= maxLength) return cleanValue;
+    return `${cleanValue.slice(0, maxLength).trim()}\n\n[Content shortened to keep AI context focused.]`;
   }
 
   private async ensureCurrentUserExists(user: RequestUser) {
