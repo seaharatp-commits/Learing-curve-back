@@ -14,9 +14,12 @@ const SYSTEM_PROMPT =
 const CLEAN_ENDING_PROMPT =
   "Keep the answer focused enough to finish within the response limit. Do not start a new paragraph or bullet point unless you can complete it. End with a complete sentence. If the answer is getting long, summarize the remaining details instead of cutting off mid-sentence.";
 
+const LIST_FORMATTING_PROMPT =
+  "When writing ordered steps, use explicit sequential numbering such as 1., 2., 3., 4. Do not repeat 1. for every item. Use bullets only for unordered lists.";
+
 const CHAT_AI_OPTIONS = { temperature: 0.5, maxTokens: 1200 };
 
-const BASE_SYSTEM_PROMPT = `${SYSTEM_PROMPT}\n\n${CLEAN_ENDING_PROMPT}`;
+const BASE_SYSTEM_PROMPT = `${SYSTEM_PROMPT}\n\n${CLEAN_ENDING_PROMPT}\n\n${LIST_FORMATTING_PROMPT}`;
 
 @Injectable()
 export class ChatService {
