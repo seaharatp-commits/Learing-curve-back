@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
@@ -254,6 +255,24 @@ export class QuizService {
     return { title, content };
   }
 
+  private getAiHttpStatus(error: unknown): number | undefined {
+    if (typeof error !== "object" || error === null || !("response" in error)) return undefined;
+    const response = (error as { response?: { status?: unknown } }).response;
+    return typeof response?.status === "number" ? response.status : undefined;
+  }
+
+  private isTemporaryAiFailure(error: unknown): boolean {
+    const status = this.getAiHttpStatus(error);
+    return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+  }
+
+  private describeAiFailure(error: unknown): string {
+    const status = this.getAiHttpStatus(error);
+    if (status) return `AI gateway responded with HTTP ${status}`;
+    if (error instanceof Error) return error.message;
+    return String(error);
+  }
+
   async generateFromArticle(user: RequestUser, articleId: string) {
     const article = await this.prisma.knowledgeBaseArticle.findUnique({ where: { id: articleId } });
     if (!article) throw new NotFoundException("ไม่พบบทความนี้");
@@ -330,8 +349,13 @@ export class QuizService {
 
     if (!generated) {
       this.logger.error(
-        `AI failed to generate a usable lesson after ${MAX_GENERATION_ATTEMPTS} attempts: ${lastError}`,
+        `AI failed to generate a usable lesson after ${MAX_GENERATION_ATTEMPTS} attempts: ${this.describeAiFailure(lastError)}`,
       );
+      if (this.isTemporaryAiFailure(lastError)) {
+        throw new ServiceUnavailableException(
+          "ระบบ AI ไม่พร้อมใช้งานชั่วคราว กรุณารอสักครู่แล้วลองสร้างบทเรียนใหม่อีกครั้ง",
+        );
+      }
       throw new BadRequestException("AI สร้างบทเรียนไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
     }
 

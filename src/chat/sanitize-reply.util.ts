@@ -4,7 +4,7 @@
  * show up as literal symbols. Strip markdown syntax, keep the words.
  */
 export function sanitizeReply(text: string): string {
-  return text
+  const cleaned = text
     .replace(/```[\s\S]*?```/g, (block) => block.replace(/```/g, "").trim())
     .replace(/`([^`]+)`/g, "$1")
     .replace(/\*\*\*(.+?)\*\*\*/g, "$1")
@@ -18,4 +18,12 @@ export function sanitizeReply(text: string): string {
     .replace(/^[-*+]\s+/gm, "• ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+
+  const lines = cleaned.split("\n");
+  const lastLine = lines.at(-1)?.trim() ?? "";
+  if (/^(?:[-*+]|\d+\.|•)\s+\S{1,10}$/.test(lastLine)) {
+    return lines.slice(0, -1).join("\n").trim();
+  }
+
+  return cleaned;
 }

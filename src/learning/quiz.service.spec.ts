@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
 import { QuizService } from "./quiz.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
@@ -230,6 +230,17 @@ describe("QuizService.generateFromTopic", () => {
         order: 5,
       },
     });
+  });
+
+  it("returns ServiceUnavailableException without saving a lesson when the AI gateway is temporarily down", async () => {
+    const { service, prisma, aiService } = makeService();
+    aiService.chat.mockRejectedValue({ response: { status: 502 } });
+
+    await expect(service.generateFromTopic(user, "AI gateway failure")).rejects.toThrow(
+      ServiceUnavailableException,
+    );
+    expect(aiService.chat).toHaveBeenCalledTimes(3);
+    expect(prisma.lesson.create).not.toHaveBeenCalled();
   });
 });
 
