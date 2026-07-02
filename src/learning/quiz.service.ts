@@ -136,18 +136,41 @@ export class QuizService {
     }
   }
 
+  private fallbackLessonChatAnswer(lesson: { title: string; content: string }): string {
+    const cleanContent = lesson.content.replace(/\s+/g, " ").trim();
+    const summary =
+      cleanContent.length > 420
+        ? `${cleanContent.slice(0, 420).trim()}...`
+        : cleanContent;
+
+    return [
+      "ขออภัยค่ะ ตอนนี้ระบบ AI ยังตอบคำถามต่อเนื่องแบบละเอียดไม่ได้ชั่วคราว",
+      `จากบทเรียน "${lesson.title}" สรุปใจความสำคัญเบื้องต้นได้ว่า:`,
+      summary || "บทเรียนนี้ยังมีข้อมูลไม่เพียงพอสำหรับสรุปค่ะ",
+      "กรุณาลองถามใหม่อีกครั้งในอีกสักครู่ หรือถามให้เฉพาะเจาะจงขึ้นเพื่อให้ระบบช่วยอธิบายต่อได้ค่ะ",
+    ].join("\n\n");
+  }
+
   private buildLessonQuizMessages(
     lesson: { title: string; content: string },
     additionalPrompt: string,
   ): AiChatMessage[] {
     const focus = additionalPrompt.trim();
     return [
-      { role: "system", content: QUIZ_SYSTEM_PROMPT },
+      {
+        role: "system",
+        content:
+          QUIZ_SYSTEM_PROMPT +
+          " When creating a quiz from a lesson, treat the lesson content as the only factual source. The learner conversation may be used only to choose emphasis, difficulty, or subtopics that already exist in the lesson. Do not create questions from unsupported claims in the conversation.",
+      },
       {
         role: "user",
         content:
-          `หัวข้อบทเรียน: ${lesson.title}\n\nเนื้อหาบทเรียน:\n${lesson.content}` +
-          (focus ? `\n\nบทสนทนา/คำถามเพิ่มเติมล่าสุดจากผู้เรียน:\n${focus}` : ""),
+          `Lesson title: ${lesson.title}\n\nVerified lesson content - use this as the factual source:\n${lesson.content}` +
+          (focus
+            ? `\n\nLearner chat context - use only as focus or emphasis, not as a factual source:\n${focus}`
+            : "") +
+          "\n\nCreate quiz questions only when the answer can be supported by the verified lesson content above.",
       },
     ];
   }
@@ -388,12 +411,17 @@ export class QuizService {
       throw new NotFoundException("ไม่พบบทเรียนนี้");
     }
 
-    const answer = await this.aiService.chat(this.buildLessonChatMessages(lesson, cleanMessage, chatHistory), {
-      temperature: 0.5,
-      maxTokens: 1000,
-    });
+    try {
+      const answer = await this.aiService.chat(this.buildLessonChatMessages(lesson, cleanMessage, chatHistory), {
+        temperature: 0.5,
+        maxTokens: 1000,
+      });
 
-    return { answer: this.normalizeLessonChatAnswer(answer) };
+      return { answer: this.normalizeLessonChatAnswer(answer) };
+    } catch (error) {
+      this.logger.error(`AI failed to answer lesson follow-up: ${this.describeAiFailure(error)}`);
+      return { answer: this.fallbackLessonChatAnswer(lesson) };
+    }
   }
 
   async generateQuizFromLesson(

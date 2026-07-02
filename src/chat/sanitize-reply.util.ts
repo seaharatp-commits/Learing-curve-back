@@ -1,21 +1,10 @@
 /**
- * AI providers often answer in markdown even when asked not to. The chat UI
- * renders replies as plain text bubbles, so leftover **bold**, # headers, etc.
- * show up as literal symbols. Strip markdown syntax, keep the words.
+ * Keep AI replies clean while preserving safe Markdown that the chat UI can
+ * render, such as headings, bold text, ordered lists, bullets, and inline code.
  */
 export function sanitizeReply(text: string): string {
   const cleaned = text
-    .replace(/```[\s\S]*?```/g, (block) => block.replace(/```/g, "").trim())
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\*\*\*(.+?)\*\*\*/g, "$1")
-    .replace(/\*\*(.+?)\*\*/g, "$1")
-    .replace(/__(.+?)__/g, "$1")
-    .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "$1")
-    .replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, "$1")
-    .replace(/~~(.+?)~~/g, "$1")
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/^>\s?/gm, "")
-    .replace(/^[-*+]\s+/gm, "• ")
+    .replace(/```(?:markdown|md)?\s*/gi, "```")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 

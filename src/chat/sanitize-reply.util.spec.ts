@@ -4,7 +4,7 @@ describe("sanitizeReply", () => {
   it("removes a short dangling bullet that looks truncated", () => {
     const result = sanitizeReply("ข้อควรระวัง\n- ตรวจสอบข้อมูลก่อนทำงาน\n- สำ");
 
-    expect(result).toBe("ข้อควรระวัง\n• ตรวจสอบข้อมูลก่อนทำงาน");
+    expect(result).toBe("ข้อควรระวัง\n- ตรวจสอบข้อมูลก่อนทำงาน");
   });
 
   it("keeps complete bullet points", () => {
