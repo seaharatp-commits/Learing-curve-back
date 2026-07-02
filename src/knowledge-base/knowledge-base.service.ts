@@ -14,6 +14,9 @@ export class KnowledgeBaseService {
     id: string;
     title: string;
     content: string;
+    summary: string | null;
+    keywords: string[];
+    tags: string[];
     createdAt: Date;
     updatedAt: Date;
     category: { name: string };
@@ -23,6 +26,9 @@ export class KnowledgeBaseService {
       title: article.title,
       content: article.content,
       category: article.category.name,
+      summary: article.summary,
+      keywords: article.keywords,
+      tags: article.tags,
       createdAt: article.createdAt,
       updatedAt: article.updatedAt,
     };
@@ -39,7 +45,15 @@ export class KnowledgeBaseService {
   async create(authorId: string, dto: KnowledgeBaseDto) {
     const category = await this.categoriesService.resolveByName(dto.category);
     const article = await this.prisma.knowledgeBaseArticle.create({
-      data: { title: dto.title, content: dto.content, categoryId: category.id, authorId },
+      data: {
+        title: dto.title,
+        content: dto.content,
+        categoryId: category.id,
+        authorId,
+        summary: dto.summary?.trim() || null,
+        keywords: dto.keywords ?? [],
+        tags: dto.tags ?? [],
+      },
       include: { category: true },
     });
     return this.toResponse(article);
@@ -50,7 +64,14 @@ export class KnowledgeBaseService {
     const category = await this.categoriesService.resolveByName(dto.category);
     const article = await this.prisma.knowledgeBaseArticle.update({
       where: { id },
-      data: { title: dto.title, content: dto.content, categoryId: category.id },
+      data: {
+        title: dto.title,
+        content: dto.content,
+        categoryId: category.id,
+        summary: dto.summary?.trim() || null,
+        keywords: dto.keywords ?? [],
+        tags: dto.tags ?? [],
+      },
       include: { category: true },
     });
     return this.toResponse(article);

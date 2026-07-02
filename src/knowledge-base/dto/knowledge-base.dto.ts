@@ -1,4 +1,4 @@
-import { IsString, MinLength } from "class-validator";
+import { IsArray, IsOptional, IsString, MinLength } from "class-validator";
 
 export class KnowledgeBaseDto {
   @IsString()
@@ -12,4 +12,18 @@ export class KnowledgeBaseDto {
   @IsString()
   @MinLength(1)
   content!: string;
+
+  @IsOptional()
+  @IsString()
+  summary?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  keywords?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  tags?: string[];
 }
