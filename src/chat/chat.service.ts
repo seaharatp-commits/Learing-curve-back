@@ -185,7 +185,7 @@ export class ChatService {
         sourceType: knowledge ? "KNOWLEDGE_BASE" : "GENERAL_AI",
         sourceArticleId: knowledge?.id ?? null,
         sourceArticleTitle: knowledge?.title ?? null,
-        sourceConfidenceScore: knowledge ? dto.knowledgeBaseConfidenceScore ?? null : null,
+        sourceConfidenceScore: null,
       },
     });
 

@@ -1,5 +1,7 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { RolesGuard } from "../auth/guards/roles.guard";
+import { Roles } from "../auth/decorators/roles.decorator";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import type { RequestUser } from "../auth/strategies/jwt.strategy";
 import { LearningService } from "./learning.service";
@@ -8,7 +10,7 @@ import { GenerateTopicDto } from "./dto/generate-topic.dto";
 import { GenerateLessonQuizDto } from "./dto/generate-lesson-quiz.dto";
 import { AskLessonQuestionDto } from "./dto/ask-lesson-question.dto";
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller("learning")
 export class LearningController {
   constructor(
@@ -41,6 +43,7 @@ export class LearningController {
   }
 
   @Post("lessons/:id/quizzes/generate")
+  @Roles("USER", "ADMIN")
   generateQuizFromLesson(
     @CurrentUser() user: RequestUser,
     @Param("id") id: string,
