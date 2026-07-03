@@ -30,9 +30,17 @@ const BIOS_SAFETY_PROMPT =
 const SOURCE_NOTE_PROMPT =
   "Do not add a Knowledge Base source note inside the answer body. The application UI shows source metadata separately at the bottom when a Knowledge Base article is used.";
 
+const SELECTED_KB_FOLLOW_UP_PROMPT =
+  'Updated selected-KB follow-up rule that overrides any stricter wording below: when a Knowledge Base article is selected, use it as the main source and clearly separate KB-supported details from extra explanation. If the KB has enough detail, answer from the KB without adding unsupported facts. If the KB does not have enough detail for the user follow-up, you may add relevant general knowledge when it helps the learner, but label it clearly in Thai before the extra section: "ข้อมูลจากฐานความรู้มีจำกัด จึงเสริมคำอธิบายจากความรู้ทั่วไปเพิ่มเติม". Do not present general knowledge as if it came from the KB. Do not invent steps, conditions, product behavior, or facts as KB-supported details unless they are present in the KB content.';
+
+const LOW_KB_CONFIDENCE_PROMPT =
+  'The selected Knowledge Base relevance score for this follow-up question is below 25%. Treat the KB as weak or partial context only. You may answer mainly from relevant general knowledge, but clearly label that part with this exact Thai note before the extra explanation: "ข้อมูลจากฐานความรู้มีจำกัด จึงเสริมคำอธิบายจากความรู้ทั่วไปเพิ่มเติม". Use only KB facts that are clearly relevant. Do not imply the general-knowledge details came from the KB.';
+
 const CHAT_AI_OPTIONS = { temperature: 0.5, maxTokens: 1200 };
 
 const BASE_SYSTEM_PROMPT = `${SYSTEM_PROMPT}\n\n${CLEAN_ENDING_PROMPT}\n\n${LIST_FORMATTING_PROMPT}\n\n${THAI_HELPDESK_STYLE_PROMPT}\n\n${TROUBLESHOOTING_FORMAT_PROMPT}\n\n${BIOS_SAFETY_PROMPT}\n\n${SOURCE_NOTE_PROMPT}`;
+
+const SELECTED_KB_SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}\n\n${SELECTED_KB_FOLLOW_UP_PROMPT}`;
 
 @Injectable()
 export class ChatService {
@@ -112,6 +120,7 @@ export class ChatService {
     sessionId: string,
     content: string,
     knowledge?: { title: string; content: string },
+    sourceConfidenceScore?: number | null,
   ): Promise<string> {
     const history = await this.prisma.chatMessage.findMany({
       where: { sessionId },
@@ -123,7 +132,7 @@ export class ChatService {
       {
         role: "system",
         content: knowledge
-          ? `${BASE_SYSTEM_PROMPT}\n\nผู้ใช้เลือกฐานความรู้ "${knowledge.title}" เป็นแหล่งอ้างอิงหลักในการตอบคำถามนี้ ให้ยึดข้อมูลในฐานความรู้นี้เป็นหลักอย่างเคร่งครัด ห้ามเดา ห้ามแต่งรายละเอียด ขั้นตอน เงื่อนไข หรือข้อสรุปที่ไม่มีข้อมูลรองรับในฐานความรู้ หากฐานความรู้มีข้อมูลไม่พอ ให้บอกอย่างชัดเจนว่า "ฐานความรู้นี้ยังให้รายละเอียดไม่เพียงพอ" แล้วแนะนำว่าควรถามหรือเพิ่มข้อมูลอะไรต่อ ห้ามใส่ความรู้ทั่วไปเพิ่มเอง เว้นแต่คำถามของผู้ใช้ขอให้เสริมความรู้ทั่วไปอย่างชัดเจน และถ้าเสริม ต้องขึ้นหัวข้อว่า "ข้อมูลเพิ่มเติมนอกฐานความรู้:" ก่อนเสมอ ตอบโดยเรียบเรียงใหม่ให้อ่านง่าย ไม่ใช่คัดลอกเนื้อหาดิบทั้งก้อน\n\nข้อมูลจากฐานความรู้:\nชื่อ: ${knowledge.title}\nเนื้อหา:\n${knowledge.content}`
+          ? `${SELECTED_KB_SYSTEM_PROMPT}${sourceConfidenceScore !== null && sourceConfidenceScore !== undefined && sourceConfidenceScore < 0.25 ? `\n\n${LOW_KB_CONFIDENCE_PROMPT}` : ""}\n\nผู้ใช้เลือกฐานความรู้ "${knowledge.title}" เป็นแหล่งอ้างอิงหลักในการตอบคำถามนี้ ให้ยึดข้อมูลในฐานความรู้นี้เป็นหลักอย่างเคร่งครัด ห้ามเดา ห้ามแต่งรายละเอียด ขั้นตอน เงื่อนไข หรือข้อสรุปที่ไม่มีข้อมูลรองรับในฐานความรู้ หากฐานความรู้มีข้อมูลไม่พอ ให้บอกอย่างชัดเจนว่า "ฐานความรู้นี้ยังให้รายละเอียดไม่เพียงพอ" แล้วแนะนำว่าควรถามหรือเพิ่มข้อมูลอะไรต่อ ห้ามใส่ความรู้ทั่วไปเพิ่มเอง เว้นแต่คำถามของผู้ใช้ขอให้เสริมความรู้ทั่วไปอย่างชัดเจน และถ้าเสริม ต้องขึ้นหัวข้อว่า "ข้อมูลเพิ่มเติมนอกฐานความรู้:" ก่อนเสมอ ตอบโดยเรียบเรียงใหม่ให้อ่านง่าย ไม่ใช่คัดลอกเนื้อหาดิบทั้งก้อน\n\nข้อมูลจากฐานความรู้:\nชื่อ: ${knowledge.title}\nเนื้อหา:\n${knowledge.content}`
           : `${BASE_SYSTEM_PROMPT}\n\nคำถามนี้ไม่ได้เลือกข้อมูลจากฐานความรู้ที่แอดมินเพิ่มไว้ ให้ตอบจากความรู้ทั่วไปได้ แต่ต้องขึ้นต้นหรือระบุให้ชัดว่า "คำตอบนี้ไม่ได้อ้างอิงจากฐานความรู้ที่แอดมินเพิ่มไว้โดยตรง"`,
       },
       ...history.map((message): AiChatMessage => ({
@@ -187,10 +196,15 @@ export class ChatService {
       throw new NotFoundException("ไม่พบข้อมูลฐานความรู้ที่เลือก");
     }
 
-    const [aiContent, sourceConfidenceScore] = await Promise.all([
-      this.generateAiReply(session.id, dto.content, knowledge ?? undefined),
-      knowledge ? this.recomputeSourceConfidence(dto.content, knowledge.id) : Promise.resolve(null),
-    ]);
+    const sourceConfidenceScore = knowledge
+      ? await this.recomputeSourceConfidence(dto.content, knowledge.id)
+      : null;
+    const aiContent = await this.generateAiReply(
+      session.id,
+      dto.content,
+      knowledge ?? undefined,
+      sourceConfidenceScore,
+    );
 
     const userMessage = await this.prisma.chatMessage.create({
       data: { sessionId: session.id, role: "USER", content: dto.content },
