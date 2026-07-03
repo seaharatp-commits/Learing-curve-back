@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, Logger, NotFoundException } from "@nest
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import type { AiChatMessage } from "../ai/ai.types";
+import { RecommendationService } from "../knowledge-base/recommendation.service";
 import { SendMessageDto } from "./dto/send-message.dto";
 import { sanitizeReply } from "./sanitize-reply.util";
 
@@ -40,6 +41,7 @@ export class ChatService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiService: AiService,
+    private readonly recommendationService: RecommendationService,
   ) {}
 
   private cleanKnowledgeFallbackLine(line: string): string {
@@ -140,6 +142,20 @@ export class ChatService {
     }
   }
 
+  private async recomputeSourceConfidence(content: string, articleId: string): Promise<number | null> {
+    try {
+      const recommendations = await this.recommendationService.recommend({
+        title: content,
+        description: content,
+      });
+      const selectedArticle = recommendations.find((recommendation) => recommendation.articleId === articleId);
+      return selectedArticle?.confidenceScore ?? null;
+    } catch (error) {
+      this.logger.warn(`Failed to recompute KB source confidence: ${error}`);
+      return null;
+    }
+  }
+
   async sendMessage(userId: string, dto: SendMessageDto) {
     let session = dto.sessionId
       ? await this.prisma.chatSession.findUnique({ where: { id: dto.sessionId } })
@@ -171,7 +187,10 @@ export class ChatService {
       throw new NotFoundException("ไม่พบข้อมูลฐานความรู้ที่เลือก");
     }
 
-    const aiContent = await this.generateAiReply(session.id, dto.content, knowledge ?? undefined);
+    const [aiContent, sourceConfidenceScore] = await Promise.all([
+      this.generateAiReply(session.id, dto.content, knowledge ?? undefined),
+      knowledge ? this.recomputeSourceConfidence(dto.content, knowledge.id) : Promise.resolve(null),
+    ]);
 
     const userMessage = await this.prisma.chatMessage.create({
       data: { sessionId: session.id, role: "USER", content: dto.content },
@@ -185,7 +204,7 @@ export class ChatService {
         sourceType: knowledge ? "KNOWLEDGE_BASE" : "GENERAL_AI",
         sourceArticleId: knowledge?.id ?? null,
         sourceArticleTitle: knowledge?.title ?? null,
-        sourceConfidenceScore: null,
+        sourceConfidenceScore,
       },
     });
 
