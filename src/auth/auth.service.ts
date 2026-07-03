@@ -1,7 +1,8 @@
-import { ConflictException, Injectable, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
 import { PrismaService } from "../prisma/prisma.service";
+import { ChangePasswordDto } from "./dto/change-password.dto";
 import { LoginDto } from "./dto/login.dto";
 import { RegisterDto } from "./dto/register.dto";
 
@@ -75,5 +76,24 @@ export class AuthService {
   async findById(id: string): Promise<AuthenticatedUser> {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id } });
     return { id: user.id, email: user.email, name: user.name, role: user.role };
+  }
+
+  async changePassword(userId: string, dto: ChangePasswordDto): Promise<{ success: boolean; message: string }> {
+    if (dto.newPassword !== dto.confirmPassword) {
+      throw new BadRequestException("รหัสผ่านใหม่และยืนยันรหัสผ่านไม่ตรงกัน");
+    }
+
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const isCurrentPasswordValid = await bcrypt.compare(dto.currentPassword, user.passwordHash);
+    if (!isCurrentPasswordValid) {
+      throw new UnauthorizedException("รหัสผ่านปัจจุบันไม่ถูกต้อง");
+    }
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: await bcrypt.hash(dto.newPassword, 10) },
+    });
+
+    return { success: true, message: "เปลี่ยนรหัสผ่านสำเร็จ" };
   }
 }
