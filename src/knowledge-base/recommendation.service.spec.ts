@@ -1,5 +1,6 @@
 import { RecommendationService } from "./recommendation.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { AiService } from "../ai/ai.service";
 
 type MockArticle = {
   id: string;
@@ -32,11 +33,18 @@ function makeArticle(overrides: Partial<MockArticle>): MockArticle {
 
 describe("RecommendationService", () => {
   let prisma: { knowledgeBaseArticle: { findMany: jest.Mock } };
+  let aiService: { chat: jest.Mock };
   let service: RecommendationService;
 
   beforeEach(() => {
     prisma = { knowledgeBaseArticle: { findMany: jest.fn() } };
-    service = new RecommendationService(prisma as unknown as PrismaService);
+    // These tests exercise the deterministic keyword-matching fallback, which is
+    // what recommend() uses whenever the AI Center is unavailable or unparseable.
+    aiService = { chat: jest.fn().mockRejectedValue(new Error("AI Center unavailable in tests")) };
+    service = new RecommendationService(
+      prisma as unknown as PrismaService,
+      aiService as unknown as AiService,
+    );
   });
 
   it("returns nothing when the query has no usable tokens", async () => {
