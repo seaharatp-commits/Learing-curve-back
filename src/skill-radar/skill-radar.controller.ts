@@ -36,6 +36,12 @@ export class SkillRadarController {
   }
 
   @Roles("ADMIN")
+  @Get("admin/events")
+  listAdminSkillScoreEvents(@Query("limit") limit?: string) {
+    return this.skillRadarService.listAdminSkillScoreEvents(Number(limit) || 30);
+  }
+
+  @Roles("ADMIN")
   @Post("admin/positions")
   createPosition(@Body() dto: PositionDto) {
     return this.skillRadarService.createPosition(dto);

@@ -55,6 +55,19 @@ export class SkillRadarService {
     });
   }
 
+  async listAdminSkillScoreEvents(limit = 30) {
+    const take = Math.max(1, Math.min(limit, 100));
+    return this.prisma.skillScoreEvent.findMany({
+      take,
+      orderBy: { createdAt: "desc" },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        position: { select: { id: true, name: true } },
+        skill: { select: { id: true, name: true } },
+      },
+    });
+  }
+
   async createPosition(dto: PositionDto) {
     const name = dto.name.trim();
     if (!name) throw new BadRequestException("กรุณาระบุชื่อตำแหน่ง");
