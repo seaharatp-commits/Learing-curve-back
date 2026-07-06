@@ -3,6 +3,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import type { AiChatMessage } from "../ai/ai.types";
 import { RecommendationService } from "../knowledge-base/recommendation.service";
+import { SkillRadarService } from "../skill-radar/skill-radar.service";
 import { SendMessageDto } from "./dto/send-message.dto";
 import { sanitizeReply } from "./sanitize-reply.util";
 
@@ -50,6 +51,7 @@ export class ChatService {
     private readonly prisma: PrismaService,
     private readonly aiService: AiService,
     private readonly recommendationService: RecommendationService,
+    private readonly skillRadarService: SkillRadarService,
   ) {}
 
   private cleanKnowledgeFallbackLine(line: string): string {
@@ -165,6 +167,18 @@ export class ChatService {
     }
   }
 
+  private async recordSkillSignalsFromQuestion(userId: string, content: string, sourceId: string) {
+    try {
+      await this.skillRadarService.recordQuestionSkillSignals({
+        userId,
+        question: content,
+        sourceId,
+      });
+    } catch (error) {
+      this.logger.warn(`Failed to record AI chat skill signal: ${error}`);
+    }
+  }
+
   async sendMessage(userId: string, dto: SendMessageDto) {
     let session = dto.sessionId
       ? await this.prisma.chatSession.findUnique({ where: { id: dto.sessionId } })
@@ -209,6 +223,7 @@ export class ChatService {
     const userMessage = await this.prisma.chatMessage.create({
       data: { sessionId: session.id, role: "USER", content: dto.content },
     });
+    await this.recordSkillSignalsFromQuestion(userId, dto.content, userMessage.id);
 
     const aiMessage = await this.prisma.chatMessage.create({
       data: {

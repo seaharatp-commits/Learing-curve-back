@@ -42,3 +42,9 @@ export interface RecordSkillScoreEventInput {
   confidence?: number | null;
   reason?: string | null;
 }
+
+export interface RecordQuestionSkillSignalsInput {
+  userId: string;
+  question: string;
+  sourceId?: string | null;
+}

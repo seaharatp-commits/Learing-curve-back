@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import type {
+  RecordQuestionSkillSignalsInput,
   RecordSkillScoreEventInput,
   SkillAnalysisCandidate,
   SkillRadarPosition,
@@ -12,6 +13,28 @@ import type { PositionSkillDto } from "./dto/position-skill.dto";
 import type { SetQuestionSkillsDto } from "./dto/set-question-skills.dto";
 
 const DEFAULT_POSITION_NAME = "Software Engineer";
+const SKILL_SCORE_SOURCE_AI_CHAT_QUESTION = "AI_CHAT_QUESTION";
+const AI_CHAT_MIN_CONFIDENCE = 0.2;
+const AI_CHAT_MAX_SKILL_EVENTS = 3;
+const AI_CHAT_MAX_SCORE_DELTA = 3;
+const BUILT_IN_SKILL_KEYWORDS: Record<string, string[]> = {
+  frontend: ["front end", "หน้าเว็บ", "หน้าจอ", "ปุ่ม", "ฟอร์ม", "responsive", "component"],
+  backend: ["back end", "api", "ฐานข้อมูล", "ล็อกอิน", "login", "auth", "server"],
+  devops: ["docker", "deploy", "deployment", "git", "merge", "workflow", "pipeline"],
+  testing: ["test", "ทดสอบ", "bug", "error", "validation", "qa"],
+  "system analysis": ["requirement", "workflow", "use case", "วิเคราะห์", "ออกแบบระบบ"],
+  database: ["database", "ฐานข้อมูล", "sql", "postgres", "postgresql", "schema", "prisma", "query"],
+  troubleshooting: ["troubleshoot", "แก้ปัญหา", "error", "diagnose", "fix"],
+  networking: ["network", "ip", "dns", "wifi", "router"],
+  hardware: ["hardware", "device", "printer", "pc", "laptop"],
+  "operating systems": ["windows", "macos", "linux", "os"],
+  "security basics": ["security", "password", "permission", "malware", "secure boot", "tpm"],
+  "user research": ["research", "interview", "persona", "user need"],
+  wireframing: ["wireframe", "flow", "layout", "structure"],
+  "visual design": ["color", "typography", "visual", "spacing"],
+  prototyping: ["prototype", "figma", "interaction", "mockup"],
+  "design systems": ["design system", "component", "token", "style guide"],
+};
 
 @Injectable()
 export class SkillRadarService {
@@ -154,12 +177,22 @@ export class SkillRadarService {
     };
   }
 
+  private normalizeForMatch(value: string): string {
+    return value.toLowerCase().replace(/[\s_\-/.]+/g, "");
+  }
+
+  private getSkillKeywords(skill: SkillRadarSkill): string[] {
+    const skillName = skill.name.toLowerCase();
+    const builtInKeywords = BUILT_IN_SKILL_KEYWORDS[skillName] ?? [];
+    return Array.from(new Set([...skill.keywords, ...builtInKeywords, skill.name]));
+  }
+
   analyzeQuestionSkills(question: string, skills: SkillRadarSkill[]): SkillAnalysisCandidate[] {
-    const normalizedQuestion = question.toLowerCase();
+    const normalizedQuestion = this.normalizeForMatch(question);
     return skills
       .map((skill) => {
-        const matchedKeywords = skill.keywords.filter((keyword) =>
-          normalizedQuestion.includes(keyword.toLowerCase()),
+        const matchedKeywords = this.getSkillKeywords(skill).filter((keyword) =>
+          normalizedQuestion.includes(this.normalizeForMatch(keyword)),
         );
         const confidence = Math.min(1, matchedKeywords.length * 0.2);
         return {
@@ -174,6 +207,55 @@ export class SkillRadarService {
       })
       .filter((candidate) => candidate.confidence > 0)
       .sort((a, b) => b.confidence - a.confidence);
+  }
+
+  async recordQuestionSkillSignals(input: RecordQuestionSkillSignalsInput) {
+    const question = input.question.trim();
+    if (question.length < 3) return [];
+
+    const skills = await this.prisma.positionSkill.findMany({
+      where: { isActive: true, position: { isActive: true } },
+      select: {
+        id: true,
+        positionId: true,
+        name: true,
+        description: true,
+        keywords: true,
+        weight: true,
+        isActive: true,
+      },
+    });
+
+    const skillById = new Map(skills.map((skill) => [skill.id, skill]));
+    const candidates = this.analyzeQuestionSkills(question, skills)
+      .filter((candidate) => candidate.confidence >= AI_CHAT_MIN_CONFIDENCE)
+      .slice(0, AI_CHAT_MAX_SKILL_EVENTS);
+
+    const events = [];
+    for (const candidate of candidates) {
+      const skill = skillById.get(candidate.skillId);
+      const skillWeight = Math.min(skill?.weight ?? 1, 1.5);
+      const scoreDelta =
+        Math.round(
+          Math.min(AI_CHAT_MAX_SCORE_DELTA, candidate.confidence * AI_CHAT_MAX_SCORE_DELTA * skillWeight) * 100,
+        ) / 100;
+
+      if (scoreDelta <= 0) continue;
+
+      events.push(
+        await this.recordSkillScoreEvent({
+          userId: input.userId,
+          skillId: candidate.skillId,
+          sourceType: SKILL_SCORE_SOURCE_AI_CHAT_QUESTION,
+          sourceId: input.sourceId ?? null,
+          scoreDelta,
+          confidence: candidate.confidence,
+          reason: `AI chat question signal: ${candidate.reason}`,
+        }),
+      );
+    }
+
+    return events;
   }
 
   async recordSkillScoreEvent(input: RecordSkillScoreEventInput) {
