@@ -4,6 +4,7 @@ import { AiService } from "../ai/ai.service";
 import { buildFingerprint, jaccardScore } from "../knowledge-base/text-similarity.util";
 import type {
   PositionSkillSuggestion,
+  RecordLessonCompletionSkillSignalsInput,
   RecordQuestionSkillSignalsInput,
   RecordSkillScoreEventInput,
   SkillAnalysisCandidate,
@@ -30,6 +31,10 @@ const SIMILAR_QUESTION_JACCARD_THRESHOLD = 0.5;
 const SIMILAR_QUESTION_DECAY = 0.2;
 const POSITION_SKILL_SUGGESTION_MIN = 3;
 const POSITION_SKILL_SUGGESTION_MAX = 7;
+const SKILL_SCORE_SOURCE_LESSON_COMPLETION = "LESSON_COMPLETION";
+const LESSON_COMPLETION_MIN_CONFIDENCE = 0.2;
+const LESSON_COMPLETION_MAX_SKILL_EVENTS = 2;
+const LESSON_COMPLETION_MAX_SCORE_DELTA = 1.5;
 const BUILT_IN_SKILL_KEYWORDS: Record<string, string[]> = {
   frontend: ["front end", "หน้าเว็บ", "หน้าจอ", "ปุ่ม", "ฟอร์ม", "responsive", "component"],
   backend: ["back end", "api", "ฐานข้อมูล", "ล็อกอิน", "login", "auth", "server"],
@@ -435,6 +440,59 @@ export class SkillRadarService {
           scoreDelta,
           confidence: candidate.confidence,
           reason: `AI chat question signal (${usedAiClassifier ? "ai-classifier" : "keyword-fallback"}): ${candidate.reason}${antiFarming.note ? ` | anti-farming: ${antiFarming.note}` : ""}`,
+        }),
+      );
+    }
+
+    return events;
+  }
+
+  async recordLessonCompletionSkillSignals(input: RecordLessonCompletionSkillSignalsInput) {
+    const text = input.lessonText.trim();
+    if (text.length < 3) return [];
+
+    const position = await this.resolveUserPosition(input.userId);
+    const skills = await this.prisma.positionSkill.findMany({
+      where: { positionId: position.id, isActive: true, position: { isActive: true } },
+      select: {
+        id: true,
+        positionId: true,
+        name: true,
+        description: true,
+        keywords: true,
+        weight: true,
+        isActive: true,
+      },
+    });
+
+    const skillById = new Map(skills.map((skill) => [skill.id, skill]));
+    const candidates = this.analyzeQuestionSkills(text, skills)
+      .filter((candidate) => candidate.confidence >= LESSON_COMPLETION_MIN_CONFIDENCE)
+      .slice(0, LESSON_COMPLETION_MAX_SKILL_EVENTS);
+
+    const events = [];
+    for (const candidate of candidates) {
+      const skill = skillById.get(candidate.skillId);
+      const skillWeight = Math.min(skill?.weight ?? 1, 1.5);
+      const scoreDelta =
+        Math.round(
+          Math.min(
+            LESSON_COMPLETION_MAX_SCORE_DELTA,
+            candidate.confidence * LESSON_COMPLETION_MAX_SCORE_DELTA * skillWeight,
+          ) * 100,
+        ) / 100;
+
+      if (scoreDelta <= 0) continue;
+
+      events.push(
+        await this.recordSkillScoreEvent({
+          userId: input.userId,
+          skillId: candidate.skillId,
+          sourceType: SKILL_SCORE_SOURCE_LESSON_COMPLETION,
+          sourceId: input.lessonId,
+          scoreDelta,
+          confidence: candidate.confidence,
+          reason: `Lesson completion signal: ${candidate.reason}`,
         }),
       );
     }

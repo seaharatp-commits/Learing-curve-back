@@ -1,5 +1,6 @@
 import { LearningService } from "./learning.service";
 import { PrismaService } from "../prisma/prisma.service";
+import type { SkillRadarService } from "../skill-radar/skill-radar.service";
 import type { RequestUser } from "../auth/strategies/jwt.strategy";
 
 const user: RequestUser = { id: "user-1", email: "user@example.com", role: "USER" };
@@ -7,11 +8,17 @@ const user: RequestUser = { id: "user-1", email: "user@example.com", role: "USER
 function makeService() {
   const prisma = {
     lesson: { count: jest.fn(), findMany: jest.fn(), findUnique: jest.fn() },
-    lessonProgress: { count: jest.fn(), upsert: jest.fn() },
+    lessonProgress: { count: jest.fn(), upsert: jest.fn(), findUnique: jest.fn() },
     quizAttempt: { findMany: jest.fn() },
   };
-  const service = new LearningService(prisma as unknown as PrismaService);
-  return { service, prisma };
+  const skillRadarService = {
+    recordLessonCompletionSkillSignals: jest.fn().mockResolvedValue([]),
+  };
+  const service = new LearningService(
+    prisma as unknown as PrismaService,
+    skillRadarService as unknown as SkillRadarService,
+  );
+  return { service, prisma, skillRadarService };
 }
 
 describe("LearningService.getDashboard", () => {

@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import { SkillRadarService } from "../skill-radar/skill-radar.service";
 import type { LearningDashboard, LessonCompletion, LessonDetail } from "./learning-dashboard.types";
 import type { RequestUser } from "../auth/strategies/jwt.strategy";
 
@@ -7,7 +8,12 @@ const RECENT_QUIZ_LIMIT = 5;
 
 @Injectable()
 export class LearningService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(LearningService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly skillRadarService: SkillRadarService,
+  ) {}
 
   async getDashboard(user: RequestUser): Promise<LearningDashboard> {
     const userId = user.id;
@@ -103,11 +109,28 @@ export class LearningService {
       throw new NotFoundException("ไม่พบบทเรียนนี้");
     }
 
+    const existingProgress = await this.prisma.lessonProgress.findUnique({
+      where: { userId_lessonId: { userId, lessonId } },
+    });
+    const isFirstCompletion = !existingProgress?.completed;
+
     const progress = await this.prisma.lessonProgress.upsert({
       where: { userId_lessonId: { userId, lessonId } },
       update: { completed: true, completedAt: new Date() },
       create: { userId, lessonId, completed: true, completedAt: new Date() },
     });
+
+    if (isFirstCompletion) {
+      this.skillRadarService
+        .recordLessonCompletionSkillSignals({
+          userId,
+          lessonId,
+          lessonText: `${lesson.title}\n${lesson.content}`,
+        })
+        .catch((error) => {
+          this.logger.warn(`Failed to record lesson completion skill signal: ${error}`);
+        });
+    }
 
     return {
       lessonId,
