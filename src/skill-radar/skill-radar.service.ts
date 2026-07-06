@@ -377,6 +377,33 @@ export class SkillRadarService {
     });
   }
 
+  async suggestQuestionSkillMappings(questionId: string) {
+    const question = await this.prisma.question.findUnique({ where: { id: questionId } });
+    if (!question) throw new NotFoundException("à¹„à¸¡à¹ˆà¸žà¸šà¸„à¸³à¸–à¸²à¸¡à¸™à¸µà¹‰");
+
+    const skills = await this.prisma.positionSkill.findMany({
+      where: { isActive: true, position: { isActive: true } },
+      include: { position: true },
+    });
+    const skillById = new Map(skills.map((skill) => [skill.id, skill]));
+
+    return this.analyzeQuestionSkills(question.questionText, skills)
+      .filter((candidate) => candidate.confidence >= 0.2)
+      .slice(0, 5)
+      .map((candidate) => {
+        const skill = skillById.get(candidate.skillId);
+        return {
+          skillId: candidate.skillId,
+          skillName: candidate.skillName,
+          positionId: skill?.positionId ?? "",
+          positionName: skill?.position.name ?? "",
+          confidence: candidate.confidence,
+          reason: candidate.reason,
+          weight: 1,
+        };
+      });
+  }
+
   private async resolvePosition(positionId?: string) {
     if (positionId) {
       const position = await this.prisma.position.findUnique({ where: { id: positionId } });

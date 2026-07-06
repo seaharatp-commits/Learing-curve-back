@@ -72,6 +72,12 @@ export class SkillRadarController {
   }
 
   @Roles("ADMIN")
+  @Get("questions/:questionId/skill-suggestions")
+  suggestQuestionSkills(@Param("questionId") questionId: string) {
+    return this.skillRadarService.suggestQuestionSkillMappings(questionId);
+  }
+
+  @Roles("ADMIN")
   @Put("questions/:questionId/skills")
   setQuestionSkills(@Param("questionId") questionId: string, @Body() dto: SetQuestionSkillsDto) {
     return this.skillRadarService.setQuestionSkillMappings(questionId, dto);
