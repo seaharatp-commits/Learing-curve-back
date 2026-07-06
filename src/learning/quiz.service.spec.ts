@@ -3,6 +3,7 @@ import { QuizService } from "./quiz.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import type { RequestUser } from "../auth/strategies/jwt.strategy";
+import { SkillRadarService } from "../skill-radar/skill-radar.service";
 
 const user: RequestUser = { id: "user-1", email: "user@example.com", role: "USER" };
 
@@ -45,11 +46,13 @@ function makeService() {
     quizAttempt: { create: jest.fn(), findMany: jest.fn() },
   };
   const aiService = { chat: jest.fn() };
+  const skillRadarService = { recordSkillScoreEvent: jest.fn() };
   const service = new QuizService(
     prisma as unknown as PrismaService,
     aiService as unknown as AiService,
+    skillRadarService as unknown as SkillRadarService,
   );
-  return { service, prisma, aiService };
+  return { service, prisma, aiService, skillRadarService };
 }
 
 describe("QuizService.generateFromArticle", () => {
@@ -347,7 +350,7 @@ describe("QuizService.submitAttempt", () => {
   });
 
   it("scores answers correctly when every quiz question has one valid answer", async () => {
-    const { service, prisma } = makeService();
+    const { service, prisma, skillRadarService } = makeService();
     prisma.quiz.findUnique.mockResolvedValue({
       id: "quiz-1",
       createdByUserId: "user-1",
@@ -384,6 +387,59 @@ describe("QuizService.submitAttempt", () => {
         submittedAt: expect.any(Date),
         completedAt: expect.any(Date),
       }),
+    });
+    expect(skillRadarService.recordSkillScoreEvent).not.toHaveBeenCalled();
+  });
+
+  it("updates mapped skill scores after a successful quiz attempt", async () => {
+    const { service, prisma, skillRadarService } = makeService();
+    prisma.quiz.findUnique.mockResolvedValue({
+      id: "quiz-1",
+      createdByUserId: "user-1",
+      lessonId: "lesson-1",
+      questions: [
+        {
+          id: "q1",
+          questionText: "Question 1",
+          correctIndex: 1,
+          explanation: "exp1",
+          options: ["a", "b", "c", "d"],
+          skillMappings: [
+            { skillId: "skill-backend", weight: 1, skill: { name: "BackEnd", weight: 1 } },
+          ],
+        },
+        {
+          id: "q2",
+          questionText: "Question 2",
+          correctIndex: 0,
+          explanation: "exp2",
+          options: ["a", "b", "c", "d"],
+          skillMappings: [
+            { skillId: "skill-backend", weight: 1, skill: { name: "BackEnd", weight: 1 } },
+          ],
+        },
+      ],
+    });
+    prisma.quizAttempt.create.mockResolvedValue({
+      id: "attempt-1",
+      submittedAt: new Date("2026-07-06T09:00:00.000Z"),
+    });
+
+    await service.submitAttempt(user, "quiz-1", {
+      answers: [
+        { questionId: "q1", selectedIndex: 1 },
+        { questionId: "q2", selectedIndex: 2 },
+      ],
+    });
+
+    expect(skillRadarService.recordSkillScoreEvent).toHaveBeenCalledWith({
+      userId: "user-1",
+      skillId: "skill-backend",
+      sourceType: "QUIZ_ATTEMPT",
+      sourceId: "attempt-1",
+      scoreDelta: 12,
+      confidence: 1,
+      reason: "BackEnd: correct answer; BackEnd: wrong answer",
     });
   });
 

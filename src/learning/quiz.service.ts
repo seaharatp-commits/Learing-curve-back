@@ -11,6 +11,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import type { AiChatMessage } from "../ai/ai.types";
 import type { RequestUser } from "../auth/strategies/jwt.strategy";
+import { SkillRadarService } from "../skill-radar/skill-radar.service";
 import type { SubmitAttemptDto } from "./dto/submit-attempt.dto";
 import type {
   AnswerResult,
@@ -30,6 +31,9 @@ const MAX_GENERATION_ATTEMPTS = 3;
 const MIN_CONTENT_LENGTH = 50;
 const MAX_LESSON_QUIZ_CONTENT_LENGTH = 6000;
 const MAX_LESSON_QUIZ_FOCUS_LENGTH = 1200;
+const SKILL_SCORE_SOURCE_QUIZ_ATTEMPT = "QUIZ_ATTEMPT";
+const CORRECT_SKILL_SCORE_DELTA = 10;
+const WRONG_SKILL_SCORE_DELTA = 2;
 
 const QUIZ_SYSTEM_PROMPT =
   "คุณคือผู้ช่วยสร้างแบบทดสอบปรนัยจากเนื้อหาความรู้ที่ให้มาเท่านั้น " +
@@ -56,6 +60,7 @@ export class QuizService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiService: AiService,
+    private readonly skillRadarService: SkillRadarService,
   ) {}
 
   private buildExtractionMessages(article: { title: string; content: string }): AiChatMessage[] {
@@ -195,6 +200,53 @@ export class QuizService {
     const existingUser = await this.prisma.user.findUnique({ where: { id: user.id } });
     if (!existingUser) {
       throw new UnauthorizedException("บัญชีผู้ใช้นี้ไม่มีอยู่ในระบบ กรุณาเข้าสู่ระบบใหม่");
+    }
+  }
+
+  private async recordQuizSkillScores(
+    userId: string,
+    attemptId: string,
+    answers: AnswerResult[],
+    questionById: Map<
+      string,
+      {
+        skillMappings?: Array<{
+          weight: number;
+          skillId: string;
+          skill?: { name?: string; weight?: number } | null;
+        }>;
+      }
+    >,
+  ) {
+    const scoreBySkillId = new Map<string, { delta: number; reasons: string[] }>();
+
+    for (const answer of answers) {
+      const question = questionById.get(answer.questionId);
+      const mappings = question?.skillMappings ?? [];
+
+      for (const mapping of mappings) {
+        const baseDelta = answer.isCorrect ? CORRECT_SKILL_SCORE_DELTA : WRONG_SKILL_SCORE_DELTA;
+        const skillWeight = mapping.skill?.weight ?? 1;
+        const delta = baseDelta * mapping.weight * skillWeight;
+        const current = scoreBySkillId.get(mapping.skillId) ?? { delta: 0, reasons: [] };
+        current.delta += delta;
+        current.reasons.push(
+          `${mapping.skill?.name ?? "Skill"}: ${answer.isCorrect ? "correct" : "wrong"} answer`,
+        );
+        scoreBySkillId.set(mapping.skillId, current);
+      }
+    }
+
+    for (const [skillId, score] of scoreBySkillId.entries()) {
+      await this.skillRadarService.recordSkillScoreEvent({
+        userId,
+        skillId,
+        sourceType: SKILL_SCORE_SOURCE_QUIZ_ATTEMPT,
+        sourceId: attemptId,
+        scoreDelta: Math.round(score.delta * 100) / 100,
+        confidence: 1,
+        reason: score.reasons.join("; "),
+      });
     }
   }
 
@@ -553,7 +605,15 @@ export class QuizService {
     const userId = user.id;
     const quiz = await this.prisma.quiz.findUnique({
       where: { id: quizId },
-      include: { questions: true },
+      include: {
+        questions: {
+          include: {
+            skillMappings: {
+              include: { skill: true },
+            },
+          },
+        },
+      },
     });
     if (!quiz) throw new NotFoundException("ไม่พบแบบทดสอบนี้");
     if (user.role !== "ADMIN" && quiz.createdByUserId !== userId) {
@@ -643,6 +703,12 @@ export class QuizService {
         completedAt: submittedAt,
       },
     });
+
+    try {
+      await this.recordQuizSkillScores(userId, attempt.id, answers, questionById);
+    } catch (error) {
+      this.logger.warn(`Failed to update quiz skill scores for attempt ${attempt.id}: ${error}`);
+    }
 
     return {
       attemptId: attempt.id,

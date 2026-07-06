@@ -7,6 +7,7 @@ import type {
   SkillRadarSkill,
   UserSkillRadar,
 } from "./skill-radar.types";
+import type { SetQuestionSkillsDto } from "./dto/set-question-skills.dto";
 
 const DEFAULT_POSITION_NAME = "Software Engineer";
 
@@ -147,6 +148,48 @@ export class SkillRadarService {
     ]);
 
     return { score, event };
+  }
+
+  async setQuestionSkillMappings(questionId: string, dto: SetQuestionSkillsDto) {
+    const question = await this.prisma.question.findUnique({ where: { id: questionId } });
+    if (!question) throw new NotFoundException("ไม่พบคำถามนี้");
+
+    const uniqueMappings = Array.from(
+      new Map(dto.mappings.map((mapping) => [mapping.skillId, mapping])).values(),
+    );
+    const skillIds = uniqueMappings.map((mapping) => mapping.skillId);
+    const skills =
+      skillIds.length === 0
+        ? []
+        : await this.prisma.positionSkill.findMany({
+            where: { id: { in: skillIds }, isActive: true, position: { isActive: true } },
+            select: { id: true },
+          });
+
+    if (skills.length !== skillIds.length) {
+      throw new BadRequestException("มี skill บางรายการที่ไม่พร้อมใช้งานหรือไม่มีอยู่จริง");
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.quizQuestionSkill.deleteMany({ where: { questionId } }),
+      ...(uniqueMappings.length > 0
+        ? [
+            this.prisma.quizQuestionSkill.createMany({
+              data: uniqueMappings.map((mapping) => ({
+                questionId,
+                skillId: mapping.skillId,
+                weight: mapping.weight ?? 1,
+              })),
+            }),
+          ]
+        : []),
+    ]);
+
+    return this.prisma.quizQuestionSkill.findMany({
+      where: { questionId },
+      orderBy: { id: "asc" },
+      include: { skill: true },
+    });
   }
 
   private async resolvePosition(positionId?: string) {
