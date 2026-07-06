@@ -1,5 +1,7 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import { AiService } from "../ai/ai.service";
+import { buildFingerprint, jaccardScore } from "../knowledge-base/text-similarity.util";
 import type {
   RecordQuestionSkillSignalsInput,
   RecordSkillScoreEventInput,
@@ -18,6 +20,13 @@ const SKILL_SCORE_SOURCE_AI_CHAT_QUESTION = "AI_CHAT_QUESTION";
 const AI_CHAT_MIN_CONFIDENCE = 0.2;
 const AI_CHAT_MAX_SKILL_EVENTS = 3;
 const AI_CHAT_MAX_SCORE_DELTA = 3;
+const AI_CLASSIFIER_MIN_CONFIDENCE = 0.4;
+const AI_CLASSIFIER_OPTIONS = { temperature: 0.1, maxTokens: 400 };
+const ANTI_FARMING_WINDOW_HOURS = 24;
+const AI_CHAT_DAILY_SKILL_EVENT_CAP = 8;
+const AI_CHAT_DAILY_SKILL_SCORE_CAP = 15;
+const SIMILAR_QUESTION_JACCARD_THRESHOLD = 0.5;
+const SIMILAR_QUESTION_DECAY = 0.2;
 const BUILT_IN_SKILL_KEYWORDS: Record<string, string[]> = {
   frontend: ["front end", "หน้าเว็บ", "หน้าจอ", "ปุ่ม", "ฟอร์ม", "responsive", "component"],
   backend: ["back end", "api", "ฐานข้อมูล", "ล็อกอิน", "login", "auth", "server"],
@@ -39,7 +48,12 @@ const BUILT_IN_SKILL_KEYWORDS: Record<string, string[]> = {
 
 @Injectable()
 export class SkillRadarService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(SkillRadarService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly aiService: AiService,
+  ) {}
 
   async listPositions(): Promise<SkillRadarPosition[]> {
     return this.prisma.position.findMany({
@@ -232,6 +246,72 @@ export class SkillRadarService {
       .sort((a, b) => b.confidence - a.confidence);
   }
 
+  private buildSkillClassifierPrompt(question: string, skills: SkillRadarSkill[]): string {
+    const skillList = skills
+      .map((skill) => `- id: ${skill.id} | name: ${skill.name}${skill.description ? ` | description: ${skill.description}` : ""}`)
+      .join("\n");
+
+    return [
+      "You are a strict skill-classification engine for a learning platform.",
+      "Given a learner's chat question, decide which of the following skills (if any) the question demonstrates knowledge of or interest in.",
+      "You MUST only choose skillId values from this exact list — never invent a skillId:",
+      skillList,
+      "",
+      `Learner question: "${question}"`,
+      "",
+      "Respond with ONLY a JSON array (no markdown, no explanation outside the JSON) of at most 3 items, each shaped exactly as:",
+      '[{"skillId": "<id from the list above>", "confidence": <number between 0 and 1>, "reason": "<short reason in Thai or English>"}]',
+      "If no skill from the list clearly applies, respond with an empty array: []",
+    ].join("\n");
+  }
+
+  private parseSkillClassifierResponse(raw: string): Array<{ skillId: string; confidence: number; reason: string }> {
+    const match = raw.match(/\[[\s\S]*\]/);
+    if (!match) throw new Error("AI classifier response did not contain a JSON array");
+
+    const parsed = JSON.parse(match[0]);
+    if (!Array.isArray(parsed)) throw new Error("AI classifier response JSON is not an array");
+
+    return parsed;
+  }
+
+  private async analyzeQuestionSkillsWithAi(
+    question: string,
+    skills: SkillRadarSkill[],
+  ): Promise<SkillAnalysisCandidate[]> {
+    if (skills.length === 0) return [];
+
+    const skillById = new Map(skills.map((skill) => [skill.id, skill]));
+    const prompt = this.buildSkillClassifierPrompt(question, skills);
+    const reply = await this.aiService.chat(
+      [
+        {
+          role: "system",
+          content: "You output only valid JSON. You never include commentary, markdown fences, or text outside the JSON array.",
+        },
+        { role: "user", content: prompt },
+      ],
+      AI_CLASSIFIER_OPTIONS,
+    );
+
+    const rawCandidates = this.parseSkillClassifierResponse(reply);
+
+    return rawCandidates
+      .filter((candidate) => candidate && typeof candidate.skillId === "string" && skillById.has(candidate.skillId))
+      .map((candidate) => {
+        const skill = skillById.get(candidate.skillId)!;
+        const confidence = Math.max(0, Math.min(1, Number(candidate.confidence) || 0));
+        return {
+          skillId: skill.id,
+          skillName: skill.name,
+          confidence,
+          reason: typeof candidate.reason === "string" && candidate.reason.trim() ? candidate.reason.trim() : "AI classifier match",
+        };
+      })
+      .filter((candidate) => candidate.confidence > 0)
+      .sort((a, b) => b.confidence - a.confidence);
+  }
+
   async recordQuestionSkillSignals(input: RecordQuestionSkillSignalsInput) {
     const question = input.question.trim();
     if (question.length < 3) return [];
@@ -251,19 +331,40 @@ export class SkillRadarService {
     });
 
     const skillById = new Map(skills.map((skill) => [skill.id, skill]));
-    const candidates = this.analyzeQuestionSkills(question, skills)
-      .filter((candidate) => candidate.confidence >= AI_CHAT_MIN_CONFIDENCE)
-      .slice(0, AI_CHAT_MAX_SKILL_EVENTS);
+
+    let candidates: SkillAnalysisCandidate[];
+    let usedAiClassifier = true;
+    try {
+      candidates = (await this.analyzeQuestionSkillsWithAi(question, skills)).filter(
+        (candidate) => candidate.confidence >= AI_CLASSIFIER_MIN_CONFIDENCE,
+      );
+    } catch (error) {
+      usedAiClassifier = false;
+      this.logger.warn(`AI skill classifier failed, falling back to keyword matching: ${error}`);
+      candidates = this.analyzeQuestionSkills(question, skills).filter(
+        (candidate) => candidate.confidence >= AI_CHAT_MIN_CONFIDENCE,
+      );
+    }
+    candidates = candidates.slice(0, AI_CHAT_MAX_SKILL_EVENTS);
 
     const events = [];
     for (const candidate of candidates) {
       const skill = skillById.get(candidate.skillId);
       const skillWeight = Math.min(skill?.weight ?? 1, 1.5);
-      const scoreDelta =
+      let scoreDelta =
         Math.round(
           Math.min(AI_CHAT_MAX_SCORE_DELTA, candidate.confidence * AI_CHAT_MAX_SCORE_DELTA * skillWeight) * 100,
         ) / 100;
 
+      if (scoreDelta <= 0) continue;
+
+      const antiFarming = await this.applyChatAntiFarmingAdjustment(
+        input.userId,
+        candidate.skillId,
+        question,
+        scoreDelta,
+      );
+      scoreDelta = antiFarming.scoreDelta;
       if (scoreDelta <= 0) continue;
 
       events.push(
@@ -274,12 +375,62 @@ export class SkillRadarService {
           sourceId: input.sourceId ?? null,
           scoreDelta,
           confidence: candidate.confidence,
-          reason: `AI chat question signal: ${candidate.reason}`,
+          reason: `AI chat question signal (${usedAiClassifier ? "ai-classifier" : "keyword-fallback"}): ${candidate.reason}${antiFarming.note ? ` | anti-farming: ${antiFarming.note}` : ""}`,
         }),
       );
     }
 
     return events;
+  }
+
+  private async applyChatAntiFarmingAdjustment(
+    userId: string,
+    skillId: string,
+    question: string,
+    scoreDelta: number,
+  ): Promise<{ scoreDelta: number; note: string | null }> {
+    const since = new Date(Date.now() - ANTI_FARMING_WINDOW_HOURS * 60 * 60 * 1000);
+    const recentEvents = await this.prisma.skillScoreEvent.findMany({
+      where: {
+        userId,
+        skillId,
+        sourceType: SKILL_SCORE_SOURCE_AI_CHAT_QUESTION,
+        createdAt: { gte: since },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: { sourceId: true, scoreDelta: true },
+    });
+
+    if (recentEvents.length === 0) return { scoreDelta, note: null };
+
+    const scoreSoFar = recentEvents.reduce((sum, event) => sum + event.scoreDelta, 0);
+    if (recentEvents.length >= AI_CHAT_DAILY_SKILL_EVENT_CAP || scoreSoFar >= AI_CHAT_DAILY_SKILL_SCORE_CAP) {
+      return { scoreDelta: 0, note: `daily cap reached (${recentEvents.length} events / ${scoreSoFar} pts in ${ANTI_FARMING_WINDOW_HOURS}h)` };
+    }
+
+    const recentSourceIds = recentEvents.map((event) => event.sourceId).filter((id): id is string => !!id);
+    if (recentSourceIds.length > 0) {
+      const recentMessages = await this.prisma.chatMessage.findMany({
+        where: { id: { in: recentSourceIds } },
+        select: { content: true },
+      });
+      const newFingerprint = buildFingerprint([question]);
+      const isDuplicateTopic = recentMessages.some(
+        (message) => jaccardScore(newFingerprint, buildFingerprint([message.content])) >= SIMILAR_QUESTION_JACCARD_THRESHOLD,
+      );
+      if (isDuplicateTopic) {
+        const decayed = Math.round(scoreDelta * SIMILAR_QUESTION_DECAY * 100) / 100;
+        return { scoreDelta: decayed, note: "similar to a recently asked question, score reduced" };
+      }
+    }
+
+    const remainingBudget = AI_CHAT_DAILY_SKILL_SCORE_CAP - scoreSoFar;
+    if (scoreDelta > remainingBudget) {
+      return { scoreDelta: Math.max(0, Math.round(remainingBudget * 100) / 100), note: "capped to remaining daily budget" };
+    }
+
+    return { scoreDelta, note: null };
   }
 
   async recordSkillScoreEvent(input: RecordSkillScoreEventInput) {
