@@ -7,6 +7,8 @@ import type {
   SkillRadarSkill,
   UserSkillRadar,
 } from "./skill-radar.types";
+import type { PositionDto } from "./dto/position.dto";
+import type { PositionSkillDto } from "./dto/position-skill.dto";
 import type { SetQuestionSkillsDto } from "./dto/set-question-skills.dto";
 
 const DEFAULT_POSITION_NAME = "Software Engineer";
@@ -20,6 +22,45 @@ export class SkillRadarService {
       where: { isActive: true },
       orderBy: { name: "asc" },
       select: { id: true, name: true, description: true, isActive: true },
+    });
+  }
+
+  async listAdminPositions() {
+    return this.prisma.position.findMany({
+      orderBy: { name: "asc" },
+      include: { skills: { orderBy: { createdAt: "asc" } } },
+    });
+  }
+
+  async createPosition(dto: PositionDto) {
+    const name = dto.name.trim();
+    if (!name) throw new BadRequestException("กรุณาระบุชื่อตำแหน่ง");
+
+    return this.prisma.position.create({
+      data: {
+        name,
+        description: dto.description?.trim() || null,
+        isActive: dto.isActive ?? true,
+      },
+      include: { skills: { orderBy: { createdAt: "asc" } } },
+    });
+  }
+
+  async updatePosition(positionId: string, dto: PositionDto) {
+    const position = await this.prisma.position.findUnique({ where: { id: positionId } });
+    if (!position) throw new NotFoundException("ไม่พบตำแหน่งนี้");
+
+    const name = dto.name.trim();
+    if (!name) throw new BadRequestException("กรุณาระบุชื่อตำแหน่ง");
+
+    return this.prisma.position.update({
+      where: { id: positionId },
+      data: {
+        name,
+        description: dto.description?.trim() || null,
+        isActive: dto.isActive ?? position.isActive,
+      },
+      include: { skills: { orderBy: { createdAt: "asc" } } },
     });
   }
 
@@ -38,6 +79,44 @@ export class SkillRadarService {
         keywords: true,
         weight: true,
         isActive: true,
+      },
+    });
+  }
+
+  async createSkill(positionId: string, dto: PositionSkillDto) {
+    const position = await this.prisma.position.findUnique({ where: { id: positionId } });
+    if (!position) throw new NotFoundException("ไม่พบตำแหน่งนี้");
+
+    const name = dto.name.trim();
+    if (!name) throw new BadRequestException("กรุณาระบุชื่อ skill");
+
+    return this.prisma.positionSkill.create({
+      data: {
+        positionId,
+        name,
+        description: dto.description?.trim() || null,
+        keywords: dto.keywords ?? [],
+        weight: dto.weight ?? 1,
+        isActive: dto.isActive ?? true,
+      },
+    });
+  }
+
+  async updateSkill(skillId: string, dto: PositionSkillDto) {
+    const skill = await this.prisma.positionSkill.findUnique({ where: { id: skillId } });
+    if (!skill) throw new NotFoundException("ไม่พบ skill นี้");
+
+    const name = dto.name.trim();
+    if (!name) throw new BadRequestException("กรุณาระบุชื่อ skill");
+
+    return this.prisma.positionSkill.update({
+      where: { id: skillId },
+      data: {
+        name,
+        description: dto.description?.trim() || null,
+        keywords: dto.keywords ?? skill.keywords,
+        weight: dto.weight ?? skill.weight,
+        isActive: dto.isActive ?? skill.isActive,
       },
     });
   }
