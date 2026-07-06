@@ -9,6 +9,7 @@ import { HistoryModule } from "./history/history.module";
 import { KnowledgeBaseModule } from "./knowledge-base/knowledge-base.module";
 import { DashboardModule } from "./dashboard/dashboard.module";
 import { LearningModule } from "./learning/learning.module";
+import { SkillRadarModule } from "./skill-radar/skill-radar.module";
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { LearningModule } from "./learning/learning.module";
     KnowledgeBaseModule,
     DashboardModule,
     LearningModule,
+    SkillRadarModule,
   ],
 })
 export class AppModule {}

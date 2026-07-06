@@ -3,7 +3,123 @@ import * as bcrypt from "bcrypt";
 
 const prisma = new PrismaClient();
 
+const defaultPositions = [
+  {
+    name: "Software Engineer",
+    description: "Builds, tests, and maintains software systems across frontend, backend, and infrastructure.",
+    skills: [
+      { name: "FrontEnd", keywords: ["ui", "layout", "component", "responsive", "react", "nextjs"] },
+      { name: "BackEnd", keywords: ["api", "database", "auth", "server", "architecture", "nestjs"] },
+      { name: "DevOps", keywords: ["docker", "deploy", "ci/cd", "pipeline", "server", "cloud"] },
+      { name: "Testing", keywords: ["test", "validation", "bug", "jest", "qa"] },
+      { name: "System Analysis", keywords: ["requirement", "workflow", "use case", "analysis"] },
+      { name: "Database", keywords: ["sql", "postgresql", "schema", "prisma", "query"] },
+    ],
+  },
+  {
+    name: "UX/UI Designer",
+    description: "Designs user-centered product experiences, flows, interfaces, and design systems.",
+    skills: [
+      { name: "User Research", keywords: ["research", "interview", "persona", "user need"] },
+      { name: "Wireframing", keywords: ["wireframe", "flow", "layout", "structure"] },
+      { name: "Visual Design", keywords: ["color", "typography", "visual", "spacing"] },
+      { name: "Prototyping", keywords: ["prototype", "figma", "interaction", "mockup"] },
+      { name: "Usability Testing", keywords: ["usability", "test", "feedback", "heuristic"] },
+      { name: "Design Systems", keywords: ["component", "token", "style guide", "design system"] },
+    ],
+  },
+  {
+    name: "Investor",
+    description: "Analyzes markets, risk, valuation, and portfolio decisions.",
+    skills: [
+      { name: "Financial Analysis", keywords: ["financial", "statement", "ratio", "cash flow"] },
+      { name: "Risk Management", keywords: ["risk", "drawdown", "volatility", "loss"] },
+      { name: "Market Research", keywords: ["market", "industry", "trend", "competitor"] },
+      { name: "Portfolio Strategy", keywords: ["portfolio", "diversification", "allocation"] },
+      { name: "Valuation", keywords: ["valuation", "dcf", "multiple", "intrinsic"] },
+      { name: "Decision Making", keywords: ["decision", "bias", "thesis", "strategy"] },
+    ],
+  },
+  {
+    name: "Financial Accounting",
+    description: "Handles bookkeeping, reporting, tax, audit, budgeting, and compliance.",
+    skills: [
+      { name: "Bookkeeping", keywords: ["journal", "ledger", "transaction", "bookkeeping"] },
+      { name: "Financial Reporting", keywords: ["report", "statement", "balance sheet", "income"] },
+      { name: "Tax", keywords: ["tax", "vat", "withholding", "filing"] },
+      { name: "Audit", keywords: ["audit", "evidence", "control", "sampling"] },
+      { name: "Budgeting", keywords: ["budget", "forecast", "variance", "planning"] },
+      { name: "Compliance", keywords: ["compliance", "standard", "policy", "regulation"] },
+    ],
+  },
+  {
+    name: "Project Manager",
+    description: "Plans, coordinates, and monitors projects, risks, teams, and stakeholders.",
+    skills: [
+      { name: "Planning", keywords: ["plan", "timeline", "milestone", "scope"] },
+      { name: "Communication", keywords: ["communication", "meeting", "status", "report"] },
+      { name: "Risk Management", keywords: ["risk", "issue", "mitigation", "dependency"] },
+      { name: "Resource Management", keywords: ["resource", "capacity", "team", "allocation"] },
+      { name: "Agile/Scrum", keywords: ["agile", "scrum", "sprint", "backlog"] },
+      { name: "Stakeholder Management", keywords: ["stakeholder", "expectation", "alignment"] },
+    ],
+  },
+  {
+    name: "Sales Manager",
+    description: "Manages sales pipelines, customer relationships, strategy, and team performance.",
+    skills: [
+      { name: "Lead Management", keywords: ["lead", "pipeline", "prospect", "qualification"] },
+      { name: "Negotiation", keywords: ["negotiation", "deal", "objection", "closing"] },
+      { name: "CRM", keywords: ["crm", "salesforce", "hubspot", "customer data"] },
+      { name: "Sales Strategy", keywords: ["strategy", "target", "segment", "pricing"] },
+      { name: "Customer Relationship", keywords: ["customer", "relationship", "retention"] },
+      { name: "Performance Analysis", keywords: ["kpi", "conversion", "forecast", "performance"] },
+    ],
+  },
+  {
+    name: "IT Support",
+    description: "Troubleshoots technical problems and supports users, devices, networks, and systems.",
+    skills: [
+      { name: "Troubleshooting", keywords: ["troubleshoot", "error", "diagnose", "fix"] },
+      { name: "Networking", keywords: ["network", "ip", "dns", "wifi", "router"] },
+      { name: "Hardware", keywords: ["hardware", "device", "printer", "pc", "laptop"] },
+      { name: "Operating Systems", keywords: ["windows", "macos", "linux", "os"] },
+      { name: "Security Basics", keywords: ["security", "malware", "password", "permission"] },
+      { name: "Customer Support", keywords: ["support", "ticket", "user", "service"] },
+    ],
+  },
+];
+
 async function main() {
+  for (const positionData of defaultPositions) {
+    const position = await prisma.position.upsert({
+      where: { name: positionData.name },
+      update: {
+        description: positionData.description,
+        isActive: true,
+      },
+      create: {
+        name: positionData.name,
+        description: positionData.description,
+      },
+    });
+
+    for (const skill of positionData.skills) {
+      await prisma.positionSkill.upsert({
+        where: { positionId_name: { positionId: position.id, name: skill.name } },
+        update: {
+          keywords: skill.keywords,
+          isActive: true,
+        },
+        create: {
+          positionId: position.id,
+          name: skill.name,
+          keywords: skill.keywords,
+        },
+      });
+    }
+  }
+
   const [accountCategory, loginCategory] = await Promise.all([
     prisma.category.upsert({
       where: { name: "บัญชีผู้ใช้" },

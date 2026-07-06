@@ -32,6 +32,8 @@ model User {
   lessonProgress  LessonProgress[]
   createdLessons  Lesson[] @relation("LessonCreator")
   createdQuizzes  Quiz[] @relation("QuizCreator")
+  skillScores      UserSkillScore[]
+  skillScoreEvents SkillScoreEvent[]
 
   @@map("users")
 }
@@ -155,6 +157,7 @@ model Question {
   createdAt    DateTime @default(now())
 
   quiz Quiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  skillMappings QuizQuestionSkill[]
 
   @@index([quizId])
   @@map("questions")
@@ -193,4 +196,95 @@ model LessonProgress {
 
   @@unique([userId, lessonId])
   @@map("lesson_progress")
+}
+
+model Position {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  skills           PositionSkill[]
+  userSkillScores  UserSkillScore[]
+  skillScoreEvents SkillScoreEvent[]
+
+  @@map("positions")
+}
+
+model PositionSkill {
+  id          String   @id @default(uuid())
+  positionId  String
+  name        String
+  description String?
+  keywords    String[] @default([])
+  weight      Float    @default(1)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  position         Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  userSkillScores  UserSkillScore[]
+  skillScoreEvents SkillScoreEvent[]
+  questionMappings QuizQuestionSkill[]
+
+  @@unique([positionId, name])
+  @@index([positionId])
+  @@map("position_skills")
+}
+
+model UserSkillScore {
+  id            String   @id @default(uuid())
+  userId        String
+  positionId    String
+  skillId       String
+  score         Float    @default(0)
+  evidenceCount Int      @default(0)
+  updatedAt     DateTime @updatedAt
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  position Position      @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  skill    PositionSkill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, skillId])
+  @@index([userId, positionId])
+  @@map("user_skill_scores")
+}
+
+model SkillScoreEvent {
+  id          String   @id @default(uuid())
+  userId      String
+  positionId  String
+  skillId     String
+  sourceType  String
+  sourceId    String?
+  scoreDelta  Float
+  scoreBefore Float
+  scoreAfter  Float
+  confidence  Float?
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  position Position      @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  skill    PositionSkill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([skillId])
+  @@map("skill_score_events")
+}
+
+model QuizQuestionSkill {
+  id         String @id @default(uuid())
+  questionId String
+  skillId    String
+  weight     Float  @default(1)
+
+  question Question      @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  skill    PositionSkill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([questionId, skillId])
+  @@index([skillId])
+  @@map("quiz_question_skills")
 }
