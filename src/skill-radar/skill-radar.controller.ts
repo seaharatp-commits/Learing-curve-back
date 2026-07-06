@@ -66,6 +66,12 @@ export class SkillRadarController {
   }
 
   @Roles("ADMIN")
+  @Get("admin/positions/:id/suggest-skills")
+  suggestSkillsForPosition(@Param("id") id: string) {
+    return this.skillRadarService.suggestSkillsForPosition(id);
+  }
+
+  @Roles("ADMIN")
   @Patch("admin/skills/:id")
   updateSkill(@Param("id") id: string, @Body() dto: PositionSkillDto) {
     return this.skillRadarService.updateSkill(id, dto);

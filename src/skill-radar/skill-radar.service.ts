@@ -3,6 +3,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import { buildFingerprint, jaccardScore } from "../knowledge-base/text-similarity.util";
 import type {
+  PositionSkillSuggestion,
   RecordQuestionSkillSignalsInput,
   RecordSkillScoreEventInput,
   SkillAnalysisCandidate,
@@ -27,6 +28,8 @@ const AI_CHAT_DAILY_SKILL_EVENT_CAP = 8;
 const AI_CHAT_DAILY_SKILL_SCORE_CAP = 15;
 const SIMILAR_QUESTION_JACCARD_THRESHOLD = 0.5;
 const SIMILAR_QUESTION_DECAY = 0.2;
+const POSITION_SKILL_SUGGESTION_MIN = 3;
+const POSITION_SKILL_SUGGESTION_MAX = 7;
 const BUILT_IN_SKILL_KEYWORDS: Record<string, string[]> = {
   frontend: ["front end", "หน้าเว็บ", "หน้าจอ", "ปุ่ม", "ฟอร์ม", "responsive", "component"],
   backend: ["back end", "api", "ฐานข้อมูล", "ล็อกอิน", "login", "auth", "server"],
@@ -172,6 +175,58 @@ export class SkillRadarService {
     });
   }
 
+  private buildPositionSkillSuggestionPrompt(positionName: string, positionDescription: string | null): string {
+    return [
+      "You are helping design a skill assessment radar for a learning platform.",
+      `Position: "${positionName}"${positionDescription ? `\nPosition description: ${positionDescription}` : ""}`,
+      `Suggest between ${POSITION_SKILL_SUGGESTION_MIN} and ${POSITION_SKILL_SUGGESTION_MAX} core skills that best represent competency areas for this position.`,
+      "Respond with ONLY a JSON array (no markdown, no commentary) where each item is shaped exactly as:",
+      '[{"name": "<short skill name, max 120 chars>", "description": "<1-2 sentence description, max 500 chars>", "keywords": ["<keyword>", "..."]}]',
+      "Each skill must have 3 to 8 keywords useful for detecting the skill from quiz questions or chat messages.",
+      "Keep skill names concise and non-overlapping with each other.",
+    ].join("\n");
+  }
+
+  async suggestSkillsForPosition(positionId: string): Promise<PositionSkillSuggestion[]> {
+    const position = await this.prisma.position.findUnique({ where: { id: positionId } });
+    if (!position) throw new NotFoundException("ไม่พบตำแหน่งนี้");
+
+    const prompt = this.buildPositionSkillSuggestionPrompt(position.name, position.description);
+    const reply = await this.aiService.chat(
+      [
+        {
+          role: "system",
+          content: "You output only valid JSON. You never include commentary, markdown fences, or text outside the JSON array.",
+        },
+        { role: "user", content: prompt },
+      ],
+      AI_CLASSIFIER_OPTIONS,
+    );
+
+    const rawSuggestions = this.extractJsonArray(reply);
+
+    const suggestions: PositionSkillSuggestion[] = rawSuggestions
+      .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+      .map((item) => ({
+        name: typeof item.name === "string" ? item.name.trim().slice(0, 120) : "",
+        description: typeof item.description === "string" ? item.description.trim().slice(0, 500) : "",
+        keywords: Array.isArray(item.keywords)
+          ? item.keywords
+              .filter((keyword): keyword is string => typeof keyword === "string" && keyword.trim().length > 0)
+              .map((keyword) => keyword.trim().slice(0, 80))
+              .slice(0, 30)
+          : [],
+      }))
+      .filter((suggestion) => suggestion.name.length > 0)
+      .slice(0, POSITION_SKILL_SUGGESTION_MAX);
+
+    if (suggestions.length < POSITION_SKILL_SUGGESTION_MIN) {
+      throw new BadRequestException("AI ไม่สามารถแนะนำ skill ได้เพียงพอ กรุณาลองใหม่อีกครั้ง");
+    }
+
+    return suggestions;
+  }
+
   async getUserRadar(userId: string, positionId?: string): Promise<UserSkillRadar> {
     const position = await this.resolveUserPosition(userId, positionId);
     const skills = await this.prisma.positionSkill.findMany({
@@ -265,14 +320,18 @@ export class SkillRadarService {
     ].join("\n");
   }
 
-  private parseSkillClassifierResponse(raw: string): Array<{ skillId: string; confidence: number; reason: string }> {
+  private extractJsonArray(raw: string): unknown[] {
     const match = raw.match(/\[[\s\S]*\]/);
-    if (!match) throw new Error("AI classifier response did not contain a JSON array");
+    if (!match) throw new Error("AI response did not contain a JSON array");
 
     const parsed = JSON.parse(match[0]);
-    if (!Array.isArray(parsed)) throw new Error("AI classifier response JSON is not an array");
+    if (!Array.isArray(parsed)) throw new Error("AI response JSON is not an array");
 
     return parsed;
+  }
+
+  private parseSkillClassifierResponse(raw: string): Array<{ skillId: string; confidence: number; reason: string }> {
+    return this.extractJsonArray(raw) as Array<{ skillId: string; confidence: number; reason: string }>;
   }
 
   private async analyzeQuestionSkillsWithAi(

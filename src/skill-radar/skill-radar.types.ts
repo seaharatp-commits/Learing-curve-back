@@ -48,3 +48,9 @@ export interface RecordQuestionSkillSignalsInput {
   question: string;
   sourceId?: string | null;
 }
+
+export interface PositionSkillSuggestion {
+  name: string;
+  description: string;
+  keywords: string[];
+}
