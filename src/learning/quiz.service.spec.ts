@@ -458,6 +458,76 @@ describe("QuizService.submitAttempt", () => {
   });
 });
 
+describe("QuizService.listAttempts", () => {
+  it("returns detailed attempt history only for the current user's quiz attempts", async () => {
+    const { service, prisma } = makeService();
+    const submittedAt = new Date("2026-07-06T10:00:00.000Z");
+    prisma.quiz.findUnique.mockResolvedValue({
+      id: "quiz-1",
+      title: "Quiz title",
+      createdByUserId: "user-1",
+    });
+    prisma.quizAttempt.findMany.mockResolvedValue([
+      {
+        id: "attempt-1",
+        userId: "user-1",
+        quizId: "quiz-1",
+        lessonId: "lesson-1",
+        score: 50,
+        submittedAt,
+        selectedAnswers: [
+          { questionId: "q1", questionText: "Question 1", selectedIndex: 1, selectedOption: "B" },
+        ],
+        correctAnswers: [
+          {
+            questionId: "q1",
+            questionText: "Question 1",
+            correctIndex: 0,
+            correctOption: "A",
+            explanation: "exp1",
+          },
+        ],
+        result: {
+          score: 50,
+          totalQuestions: 1,
+          correctCount: 0,
+          answers: [
+            {
+              questionId: "q1",
+              selectedIndex: 1,
+              correctIndex: 0,
+              isCorrect: false,
+              explanation: "exp1",
+            },
+          ],
+        },
+      },
+    ]);
+
+    const result = await service.listAttempts(user, "quiz-1");
+
+    expect(prisma.quizAttempt.findMany).toHaveBeenCalledWith({
+      where: { quizId: "quiz-1", userId: "user-1" },
+      orderBy: { submittedAt: "desc" },
+    });
+    expect(result[0]).toMatchObject({
+      attemptId: "attempt-1",
+      quizTitle: "Quiz title",
+      score: 50,
+      detailAnswers: [
+        {
+          questionId: "q1",
+          questionText: "Question 1",
+          selectedAnswer: "B",
+          correctAnswer: "A",
+          isCorrect: false,
+          explanation: "exp1",
+        },
+      ],
+    });
+  });
+});
+
 describe("QuizService.remove", () => {
   it("throws NotFoundException for a missing quiz", async () => {
     const { service, prisma } = makeService();

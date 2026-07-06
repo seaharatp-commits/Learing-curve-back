@@ -678,16 +678,67 @@ export class QuizService {
         typeof result.correctCount === "number"
           ? result.correctCount
           : answers.filter((answer) => answer.isCorrect).length;
+      const selectedAnswers = Array.isArray(attempt.selectedAnswers)
+        ? (attempt.selectedAnswers as Record<string, unknown>[])
+        : [];
+      const correctAnswers = Array.isArray(attempt.correctAnswers)
+        ? (attempt.correctAnswers as Record<string, unknown>[])
+        : [];
+      const selectedByQuestionId = new Map(
+        selectedAnswers
+          .filter((answer) => typeof answer.questionId === "string")
+          .map((answer) => [answer.questionId as string, answer]),
+      );
+      const answerByQuestionId = new Map(answers.map((answer) => [answer.questionId, answer]));
+      const detailAnswers = correctAnswers
+        .filter((answer) => typeof answer.questionId === "string")
+        .map((correctAnswer) => {
+          const questionId = correctAnswer.questionId as string;
+          const selectedAnswer = selectedByQuestionId.get(questionId);
+          const resultAnswer = answerByQuestionId.get(questionId);
+          const selectedIndex =
+            typeof selectedAnswer?.selectedIndex === "number"
+              ? selectedAnswer.selectedIndex
+              : resultAnswer?.selectedIndex ?? null;
+          const correctIndex =
+            typeof correctAnswer.correctIndex === "number"
+              ? correctAnswer.correctIndex
+              : resultAnswer?.correctIndex ?? null;
+
+          return {
+            questionId,
+            questionText:
+              typeof correctAnswer.questionText === "string"
+                ? correctAnswer.questionText
+                : typeof selectedAnswer?.questionText === "string"
+                  ? selectedAnswer.questionText
+                  : "",
+            selectedIndex,
+            selectedAnswer:
+              typeof selectedAnswer?.selectedOption === "string" ? selectedAnswer.selectedOption : null,
+            correctIndex,
+            correctAnswer:
+              typeof correctAnswer.correctOption === "string" ? correctAnswer.correctOption : null,
+            isCorrect:
+              typeof resultAnswer?.isCorrect === "boolean"
+                ? resultAnswer.isCorrect
+                : selectedIndex !== null && correctIndex !== null && selectedIndex === correctIndex,
+            explanation:
+              typeof correctAnswer.explanation === "string" ? correctAnswer.explanation : null,
+          };
+        });
 
       return {
         attemptId: attempt.id,
         quizId: attempt.quizId,
         lessonId: attempt.lessonId,
+        quizTitle: quiz.title,
         score: attempt.score,
         totalQuestions,
         correctCount,
         submittedAt: attempt.submittedAt,
         answers,
+        detailAnswers,
       };
     });
   }
