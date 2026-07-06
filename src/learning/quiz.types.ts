@@ -66,4 +66,16 @@ export interface QuizAttemptResult {
   totalQuestions: number;
   correctCount: number;
   answers: AnswerResult[];
+  submittedAt: Date;
+}
+
+export interface QuizAttemptHistoryItem {
+  attemptId: string;
+  quizId: string;
+  lessonId: string | null;
+  score: number;
+  totalQuestions: number;
+  correctCount: number;
+  submittedAt: Date;
+  answers: AnswerResult[];
 }

@@ -6,6 +6,7 @@ import {
   ServiceUnavailableException,
   UnauthorizedException,
 } from "@nestjs/common";
+import type { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import type { AiChatMessage } from "../ai/ai.types";
@@ -18,6 +19,7 @@ import type {
   GeneratedTopicLesson,
   GeneratedTopicResult,
   LessonChatResult,
+  QuizAttemptHistoryItem,
   QuizAttemptResult,
   QuizForAttempt,
   QuizListItem,
@@ -604,9 +606,42 @@ export class QuizService {
 
     const correctCount = answers.filter((a) => a.isCorrect).length;
     const score = Math.round((correctCount / quiz.questions.length) * 100);
+    const submittedAt = new Date();
+    const selectedAnswers = dto.answers.map((answer) => {
+      const question = questionById.get(answer.questionId)!;
+      return {
+        questionId: answer.questionId,
+        questionText: question.questionText,
+        selectedIndex: answer.selectedIndex,
+        selectedOption: question.options[answer.selectedIndex] ?? null,
+      };
+    });
+    const correctAnswers = quiz.questions.map((question) => ({
+      questionId: question.id,
+      questionText: question.questionText,
+      correctIndex: question.correctIndex,
+      correctOption: question.options[question.correctIndex] ?? null,
+      explanation: question.explanation ?? null,
+    }));
+    const resultSnapshot = {
+      score,
+      totalQuestions: quiz.questions.length,
+      correctCount,
+      answers,
+    };
 
     const attempt = await this.prisma.quizAttempt.create({
-      data: { userId, quizId, score },
+      data: {
+        userId,
+        quizId,
+        lessonId: quiz.lessonId,
+        score,
+        selectedAnswers: selectedAnswers as unknown as Prisma.InputJsonValue,
+        correctAnswers: correctAnswers as unknown as Prisma.InputJsonValue,
+        result: resultSnapshot as unknown as Prisma.InputJsonValue,
+        submittedAt,
+        completedAt: submittedAt,
+      },
     });
 
     return {
@@ -615,6 +650,45 @@ export class QuizService {
       totalQuestions: quiz.questions.length,
       correctCount,
       answers,
+      submittedAt: attempt.submittedAt,
     };
+  }
+
+  async listAttempts(user: RequestUser, quizId: string): Promise<QuizAttemptHistoryItem[]> {
+    const quiz = await this.prisma.quiz.findUnique({ where: { id: quizId } });
+    if (!quiz) throw new NotFoundException("ไม่พบแบบทดสอบนี้");
+    if (user.role !== "ADMIN" && quiz.createdByUserId !== user.id) {
+      throw new NotFoundException("ไม่พบแบบทดสอบนี้");
+    }
+
+    const attempts = await this.prisma.quizAttempt.findMany({
+      where: user.role === "ADMIN" ? { quizId } : { quizId, userId: user.id },
+      orderBy: { submittedAt: "desc" },
+    });
+
+    return attempts.map((attempt) => {
+      const result =
+        typeof attempt.result === "object" && attempt.result !== null && !Array.isArray(attempt.result)
+          ? (attempt.result as Record<string, unknown>)
+          : {};
+      const answers = Array.isArray(result.answers) ? (result.answers as AnswerResult[]) : [];
+      const totalQuestions =
+        typeof result.totalQuestions === "number" ? result.totalQuestions : answers.length;
+      const correctCount =
+        typeof result.correctCount === "number"
+          ? result.correctCount
+          : answers.filter((answer) => answer.isCorrect).length;
+
+      return {
+        attemptId: attempt.id,
+        quizId: attempt.quizId,
+        lessonId: attempt.lessonId,
+        score: attempt.score,
+        totalQuestions,
+        correctCount,
+        submittedAt: attempt.submittedAt,
+        answers,
+      };
+    });
   }
 }

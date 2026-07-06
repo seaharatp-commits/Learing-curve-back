@@ -24,6 +24,11 @@ export class QuizController {
     return this.quizService.list(user);
   }
 
+  @Get(":id/attempts")
+  listAttempts(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+    return this.quizService.listAttempts(user, id);
+  }
+
   @Get(":id")
   getForAttempt(@CurrentUser() user: RequestUser, @Param("id") id: string) {
     return this.quizService.getForAttempt(user, id);

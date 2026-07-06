@@ -42,7 +42,7 @@ function makeService() {
     knowledgeBaseArticle: { findUnique: jest.fn() },
     lesson: { aggregate: jest.fn(), create: jest.fn(), findUnique: jest.fn() },
     quiz: { create: jest.fn(), delete: jest.fn(), findMany: jest.fn(), findUnique: jest.fn() },
-    quizAttempt: { create: jest.fn() },
+    quizAttempt: { create: jest.fn(), findMany: jest.fn() },
   };
   const aiService = { chat: jest.fn() };
   const service = new QuizService(
@@ -351,12 +351,14 @@ describe("QuizService.submitAttempt", () => {
     prisma.quiz.findUnique.mockResolvedValue({
       id: "quiz-1",
       createdByUserId: "user-1",
+      lessonId: "lesson-1",
       questions: [
-        { id: "q1", correctIndex: 1, explanation: "exp1", options: ["a", "b", "c", "d"] },
-        { id: "q2", correctIndex: 0, explanation: "exp2", options: ["a", "b", "c", "d"] },
+        { id: "q1", questionText: "Question 1", correctIndex: 1, explanation: "exp1", options: ["a", "b", "c", "d"] },
+        { id: "q2", questionText: "Question 2", correctIndex: 0, explanation: "exp2", options: ["a", "b", "c", "d"] },
       ],
     });
-    prisma.quizAttempt.create.mockResolvedValue({ id: "attempt-1" });
+    const submittedAt = new Date("2026-07-06T09:00:00.000Z");
+    prisma.quizAttempt.create.mockResolvedValue({ id: "attempt-1", submittedAt });
 
     const result = await service.submitAttempt(user, "quiz-1", {
       answers: [
@@ -369,8 +371,19 @@ describe("QuizService.submitAttempt", () => {
     expect(result.totalQuestions).toBe(2);
     expect(result.score).toBe(50);
     expect(result.answers).toHaveLength(2);
+    expect(result.submittedAt).toEqual(submittedAt);
     expect(prisma.quizAttempt.create).toHaveBeenCalledWith({
-      data: { userId: "user-1", quizId: "quiz-1", score: 50 },
+      data: expect.objectContaining({
+        userId: "user-1",
+        quizId: "quiz-1",
+        lessonId: "lesson-1",
+        score: 50,
+        selectedAnswers: expect.any(Array),
+        correctAnswers: expect.any(Array),
+        result: expect.objectContaining({ score: 50, totalQuestions: 2, correctCount: 1 }),
+        submittedAt: expect.any(Date),
+        completedAt: expect.any(Date),
+      }),
     });
   });
 

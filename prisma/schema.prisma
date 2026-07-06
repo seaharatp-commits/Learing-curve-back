@@ -164,13 +164,20 @@ model QuizAttempt {
   id          String   @id @default(uuid())
   userId      String
   quizId      String
+  lessonId    String?
   score       Int
+  selectedAnswers Json     @default("[]")
+  correctAnswers  Json     @default("[]")
+  result          Json     @default("{}")
+  submittedAt DateTime @default(now())
   completedAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   quiz Quiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
 
   @@index([userId, completedAt])
+  @@index([userId, submittedAt])
+  @@index([quizId, submittedAt])
   @@map("quiz_attempts")
 }
 
