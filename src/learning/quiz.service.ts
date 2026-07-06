@@ -572,7 +572,15 @@ export class QuizService {
   async getForAttempt(user: RequestUser, quizId: string): Promise<QuizForAttempt> {
     const quiz = await this.prisma.quiz.findUnique({
       where: { id: quizId },
-      include: { questions: true },
+      include: {
+        questions: {
+          include: {
+            skillMappings: {
+              include: { skill: { include: { position: true } } },
+            },
+          },
+        },
+      },
     });
     if (!quiz) throw new NotFoundException("ไม่พบแบบทดสอบนี้");
     if (user.role !== "ADMIN" && quiz.createdByUserId !== user.id) {
@@ -586,6 +594,16 @@ export class QuizService {
         id: q.id,
         questionText: q.questionText,
         options: q.options,
+        skillMappings:
+          user.role === "ADMIN"
+            ? q.skillMappings.map((mapping) => ({
+                skillId: mapping.skillId,
+                skillName: mapping.skill.name,
+                positionId: mapping.skill.positionId,
+                positionName: mapping.skill.position.name,
+                weight: mapping.weight,
+              }))
+            : undefined,
       })),
     };
   }

@@ -11,6 +11,7 @@ import type {
 import type { PositionDto } from "./dto/position.dto";
 import type { PositionSkillDto } from "./dto/position-skill.dto";
 import type { SetQuestionSkillsDto } from "./dto/set-question-skills.dto";
+import type { UpdateMyPositionDto } from "./dto/update-my-position.dto";
 
 const DEFAULT_POSITION_NAME = "Software Engineer";
 const SKILL_SCORE_SOURCE_AI_CHAT_QUESTION = "AI_CHAT_QUESTION";
@@ -158,7 +159,7 @@ export class SkillRadarService {
   }
 
   async getUserRadar(userId: string, positionId?: string): Promise<UserSkillRadar> {
-    const position = await this.resolvePosition(positionId);
+    const position = await this.resolveUserPosition(userId, positionId);
     const skills = await this.prisma.positionSkill.findMany({
       where: { positionId: position.id, isActive: true },
       orderBy: { createdAt: "asc" },
@@ -188,6 +189,15 @@ export class SkillRadarService {
         };
       }),
     };
+  }
+
+  async updateMyPosition(userId: string, dto: UpdateMyPositionDto): Promise<UserSkillRadar> {
+    const position = await this.resolvePosition(dto.positionId);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { preferredPositionId: position.id },
+    });
+    return this.getUserRadar(userId, position.id);
   }
 
   private normalizeForMatch(value: string): string {
@@ -226,8 +236,9 @@ export class SkillRadarService {
     const question = input.question.trim();
     if (question.length < 3) return [];
 
+    const position = await this.resolveUserPosition(input.userId);
     const skills = await this.prisma.positionSkill.findMany({
-      where: { isActive: true, position: { isActive: true } },
+      where: { positionId: position.id, isActive: true, position: { isActive: true } },
       select: {
         id: true,
         positionId: true,
@@ -384,5 +395,17 @@ export class SkillRadarService {
     });
     if (!firstPosition) throw new NotFoundException("ยังไม่มีตำแหน่งสำหรับ Skill Radar");
     return firstPosition;
+  }
+
+  private async resolveUserPosition(userId: string, requestedPositionId?: string) {
+    if (requestedPositionId) return this.resolvePosition(requestedPositionId);
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { preferredPosition: true },
+    });
+
+    if (user?.preferredPosition?.isActive) return user.preferredPosition;
+    return this.resolvePosition();
   }
 }

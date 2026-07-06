@@ -8,6 +8,7 @@ import { SkillRadarService } from "./skill-radar.service";
 import { PositionDto } from "./dto/position.dto";
 import { PositionSkillDto } from "./dto/position-skill.dto";
 import { SetQuestionSkillsDto } from "./dto/set-question-skills.dto";
+import { UpdateMyPositionDto } from "./dto/update-my-position.dto";
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller("skill-radar")
@@ -27,6 +28,11 @@ export class SkillRadarController {
   @Get("me")
   getMyRadar(@CurrentUser() user: RequestUser, @Query("positionId") positionId?: string) {
     return this.skillRadarService.getUserRadar(user.id, positionId);
+  }
+
+  @Put("me/position")
+  updateMyPosition(@CurrentUser() user: RequestUser, @Body() dto: UpdateMyPositionDto) {
+    return this.skillRadarService.updateMyPosition(user.id, dto);
   }
 
   @Roles("ADMIN")
