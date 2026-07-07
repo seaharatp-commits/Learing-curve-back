@@ -24,10 +24,15 @@ const AI_CHAT_MAX_SKILL_EVENTS = 3;
 const AI_CHAT_MAX_SCORE_DELTA = 3;
 const AI_CLASSIFIER_MIN_CONFIDENCE = 0.4;
 const AI_CLASSIFIER_OPTIONS = { temperature: 0.1, maxTokens: 400 };
+const AI_CLASSIFIER_MAX_QUESTION_LENGTH = 900;
 const ANTI_FARMING_WINDOW_HOURS = 24;
 const AI_CHAT_DAILY_SKILL_EVENT_CAP = 8;
 const AI_CHAT_DAILY_SKILL_SCORE_CAP = 15;
+const AI_CHAT_DAILY_USER_EVENT_CAP = 25;
+const AI_CHAT_DAILY_USER_SCORE_CAP = 35;
+const AI_CHAT_SESSION_SKILL_EVENT_CAP = 5;
 const SIMILAR_QUESTION_JACCARD_THRESHOLD = 0.5;
+const DUPLICATE_QUESTION_JACCARD_THRESHOLD = 0.85;
 const SIMILAR_QUESTION_DECAY = 0.2;
 const POSITION_SKILL_SUGGESTION_MIN = 3;
 const POSITION_SKILL_SUGGESTION_MAX = 7;
@@ -278,6 +283,24 @@ export class SkillRadarService {
     return value.toLowerCase().replace(/[\s_\-/.]+/g, "");
   }
 
+  private getMatchTokens(value: string): Set<string> {
+    return buildFingerprint([value]);
+  }
+
+  private keywordMatches(question: string, keyword: string): boolean {
+    const cleanKeyword = keyword.trim().toLowerCase();
+    if (!cleanKeyword) return false;
+
+    const normalizedKeyword = this.normalizeForMatch(cleanKeyword);
+    const normalizedQuestion = this.normalizeForMatch(question);
+
+    if (normalizedKeyword.length <= 3) {
+      return this.getMatchTokens(question).has(cleanKeyword);
+    }
+
+    return normalizedQuestion.includes(normalizedKeyword);
+  }
+
   private getSkillKeywords(skill: SkillRadarSkill): string[] {
     const skillName = skill.name.toLowerCase();
     const builtInKeywords = BUILT_IN_SKILL_KEYWORDS[skillName] ?? [];
@@ -285,11 +308,10 @@ export class SkillRadarService {
   }
 
   analyzeQuestionSkills(question: string, skills: SkillRadarSkill[]): SkillAnalysisCandidate[] {
-    const normalizedQuestion = this.normalizeForMatch(question);
     return skills
       .map((skill) => {
         const matchedKeywords = this.getSkillKeywords(skill).filter((keyword) =>
-          normalizedQuestion.includes(this.normalizeForMatch(keyword)),
+          this.keywordMatches(question, keyword),
         );
         const confidence = Math.min(1, matchedKeywords.length * 0.2);
         return {
@@ -307,6 +329,10 @@ export class SkillRadarService {
   }
 
   private buildSkillClassifierPrompt(question: string, skills: SkillRadarSkill[]): string {
+    const cleanQuestion =
+      question.length > AI_CLASSIFIER_MAX_QUESTION_LENGTH
+        ? `${question.slice(0, AI_CLASSIFIER_MAX_QUESTION_LENGTH).trim()}...`
+        : question;
     const skillList = skills
       .map((skill) => `- id: ${skill.id} | name: ${skill.name}${skill.description ? ` | description: ${skill.description}` : ""}`)
       .join("\n");
@@ -317,7 +343,7 @@ export class SkillRadarService {
       "You MUST only choose skillId values from this exact list — never invent a skillId:",
       skillList,
       "",
-      `Learner question: "${question}"`,
+      `Learner question: "${cleanQuestion}"`,
       "",
       "Respond with ONLY a JSON array (no markdown, no explanation outside the JSON) of at most 3 items, each shaped exactly as:",
       '[{"skillId": "<id from the list above>", "confidence": <number between 0 and 1>, "reason": "<short reason in Thai or English>"}]',
@@ -372,13 +398,14 @@ export class SkillRadarService {
           reason: typeof candidate.reason === "string" && candidate.reason.trim() ? candidate.reason.trim() : "AI classifier match",
         };
       })
-      .filter((candidate) => candidate.confidence > 0)
+      .filter((candidate) => Number.isFinite(candidate.confidence) && candidate.confidence > 0)
       .sort((a, b) => b.confidence - a.confidence);
   }
 
   async recordQuestionSkillSignals(input: RecordQuestionSkillSignalsInput) {
     const question = input.question.trim();
     if (question.length < 3) return [];
+    if (this.getMatchTokens(question).size < 2) return [];
 
     const position = await this.resolveUserPosition(input.userId);
     const skills = await this.prisma.positionSkill.findMany({
@@ -427,6 +454,7 @@ export class SkillRadarService {
         candidate.skillId,
         question,
         scoreDelta,
+        input.sourceId ?? null,
       );
       scoreDelta = antiFarming.scoreDelta;
       if (scoreDelta <= 0) continue;
@@ -505,25 +533,64 @@ export class SkillRadarService {
     skillId: string,
     question: string,
     scoreDelta: number,
+    sourceId: string | null,
   ): Promise<{ scoreDelta: number; note: string | null }> {
     const since = new Date(Date.now() - ANTI_FARMING_WINDOW_HOURS * 60 * 60 * 1000);
-    const recentEvents = await this.prisma.skillScoreEvent.findMany({
+    const recentUserEvents = await this.prisma.skillScoreEvent.findMany({
       where: {
         userId,
-        skillId,
         sourceType: SKILL_SCORE_SOURCE_AI_CHAT_QUESTION,
         createdAt: { gte: since },
       },
       orderBy: { createdAt: "desc" },
-      take: 50,
-      select: { sourceId: true, scoreDelta: true },
+      take: 100,
+      select: { sourceId: true, scoreDelta: true, skillId: true },
     });
+
+    const totalScoreSoFar = recentUserEvents.reduce((sum, event) => sum + event.scoreDelta, 0);
+    if (
+      recentUserEvents.length >= AI_CHAT_DAILY_USER_EVENT_CAP ||
+      totalScoreSoFar >= AI_CHAT_DAILY_USER_SCORE_CAP
+    ) {
+      return {
+        scoreDelta: 0,
+        note: `daily user cap reached (${recentUserEvents.length} events / ${totalScoreSoFar} pts in ${ANTI_FARMING_WINDOW_HOURS}h)`,
+      };
+    }
+
+    const recentEvents = recentUserEvents.filter((event) => event.skillId === skillId);
+
+    if (sourceId) {
+      const currentMessage = await this.prisma.chatMessage.findUnique({
+        where: { id: sourceId },
+        select: { sessionId: true },
+      });
+      if (currentMessage?.sessionId) {
+        const sessionMessages = await this.prisma.chatMessage.findMany({
+          where: {
+            sessionId: currentMessage.sessionId,
+            createdAt: { gte: since },
+          },
+          select: { id: true },
+        });
+        const sessionMessageIds = new Set(sessionMessages.map((message) => message.id));
+        const sessionSkillEventCount = recentEvents.filter(
+          (event) => event.sourceId && sessionMessageIds.has(event.sourceId),
+        ).length;
+        if (sessionSkillEventCount >= AI_CHAT_SESSION_SKILL_EVENT_CAP) {
+          return {
+            scoreDelta: 0,
+            note: `session skill cap reached (${sessionSkillEventCount} events for this skill in the current session)`,
+          };
+        }
+      }
+    }
 
     if (recentEvents.length === 0) return { scoreDelta, note: null };
 
     const scoreSoFar = recentEvents.reduce((sum, event) => sum + event.scoreDelta, 0);
     if (recentEvents.length >= AI_CHAT_DAILY_SKILL_EVENT_CAP || scoreSoFar >= AI_CHAT_DAILY_SKILL_SCORE_CAP) {
-      return { scoreDelta: 0, note: `daily cap reached (${recentEvents.length} events / ${scoreSoFar} pts in ${ANTI_FARMING_WINDOW_HOURS}h)` };
+      return { scoreDelta: 0, note: `daily skill cap reached (${recentEvents.length} events / ${scoreSoFar} pts in ${ANTI_FARMING_WINDOW_HOURS}h)` };
     }
 
     const recentSourceIds = recentEvents.map((event) => event.sourceId).filter((id): id is string => !!id);
@@ -533,18 +600,35 @@ export class SkillRadarService {
         select: { content: true },
       });
       const newFingerprint = buildFingerprint([question]);
-      const isDuplicateTopic = recentMessages.some(
-        (message) => jaccardScore(newFingerprint, buildFingerprint([message.content])) >= SIMILAR_QUESTION_JACCARD_THRESHOLD,
+      const similarity = Math.max(
+        0,
+        ...recentMessages.map((message) =>
+          jaccardScore(newFingerprint, buildFingerprint([message.content])),
+        ),
       );
-      if (isDuplicateTopic) {
+      if (similarity >= DUPLICATE_QUESTION_JACCARD_THRESHOLD) {
+        return {
+          scoreDelta: 0,
+          note: `duplicate or near-duplicate question detected (${Math.round(similarity * 100)}% similar)`,
+        };
+      }
+      if (similarity >= SIMILAR_QUESTION_JACCARD_THRESHOLD) {
         const decayed = Math.round(scoreDelta * SIMILAR_QUESTION_DECAY * 100) / 100;
-        return { scoreDelta: decayed, note: "similar to a recently asked question, score reduced" };
+        return {
+          scoreDelta: decayed,
+          note: `similar to a recently asked question, score reduced (${Math.round(similarity * 100)}% similar)`,
+        };
       }
     }
 
     const remainingBudget = AI_CHAT_DAILY_SKILL_SCORE_CAP - scoreSoFar;
     if (scoreDelta > remainingBudget) {
-      return { scoreDelta: Math.max(0, Math.round(remainingBudget * 100) / 100), note: "capped to remaining daily budget" };
+      return { scoreDelta: Math.max(0, Math.round(remainingBudget * 100) / 100), note: "capped to remaining daily skill budget" };
+    }
+
+    const remainingUserBudget = AI_CHAT_DAILY_USER_SCORE_CAP - totalScoreSoFar;
+    if (scoreDelta > remainingUserBudget) {
+      return { scoreDelta: Math.max(0, Math.round(remainingUserBudget * 100) / 100), note: "capped to remaining daily user budget" };
     }
 
     return { scoreDelta, note: null };
