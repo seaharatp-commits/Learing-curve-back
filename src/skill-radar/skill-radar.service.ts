@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import type { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import { buildFingerprint, jaccardScore } from "../knowledge-base/text-similarity.util";
@@ -62,6 +63,16 @@ const BUILT_IN_SKILL_KEYWORDS: Record<string, string[]> = {
   "design systems": ["design system", "component", "token", "style guide"],
 };
 
+interface AdminSkillScoreEventQuery {
+  limit?: number;
+  page?: number;
+  userId?: string;
+  positionId?: string;
+  skillId?: string;
+  sourceType?: string;
+  search?: string;
+}
+
 @Injectable()
 export class SkillRadarService {
   private readonly logger = new Logger(SkillRadarService.name);
@@ -86,17 +97,52 @@ export class SkillRadarService {
     });
   }
 
-  async listAdminSkillScoreEvents(limit = 30) {
-    const take = Math.max(1, Math.min(limit, 100));
-    return this.prisma.skillScoreEvent.findMany({
-      take,
-      orderBy: { createdAt: "desc" },
-      include: {
-        user: { select: { id: true, name: true, email: true } },
-        position: { select: { id: true, name: true } },
-        skill: { select: { id: true, name: true } },
-      },
-    });
+  async listAdminSkillScoreEvents(query: AdminSkillScoreEventQuery = {}) {
+    const take = Math.max(1, Math.min(Number(query.limit) || 30, 100));
+    const page = Math.max(1, Number(query.page) || 1);
+    const skip = (page - 1) * take;
+    const search = query.search?.trim();
+    const where: Prisma.SkillScoreEventWhereInput = {
+      ...(query.userId ? { userId: query.userId } : {}),
+      ...(query.positionId ? { positionId: query.positionId } : {}),
+      ...(query.skillId ? { skillId: query.skillId } : {}),
+      ...(query.sourceType ? { sourceType: query.sourceType } : {}),
+      ...(search
+        ? {
+            OR: [
+              { reason: { contains: search, mode: "insensitive" } },
+              { sourceType: { contains: search, mode: "insensitive" } },
+              { user: { name: { contains: search, mode: "insensitive" } } },
+              { user: { email: { contains: search, mode: "insensitive" } } },
+              { position: { name: { contains: search, mode: "insensitive" } } },
+              { skill: { name: { contains: search, mode: "insensitive" } } },
+            ],
+          }
+        : {}),
+    };
+
+    const [items, total] = await Promise.all([
+      this.prisma.skillScoreEvent.findMany({
+        where,
+        take,
+        skip,
+        orderBy: { createdAt: "desc" },
+        include: {
+          user: { select: { id: true, name: true, email: true } },
+          position: { select: { id: true, name: true } },
+          skill: { select: { id: true, name: true } },
+        },
+      }),
+      this.prisma.skillScoreEvent.count({ where }),
+    ]);
+
+    return {
+      items,
+      total,
+      page,
+      limit: take,
+      totalPages: Math.max(1, Math.ceil(total / take)),
+    };
   }
 
   async createPosition(dto: PositionDto) {

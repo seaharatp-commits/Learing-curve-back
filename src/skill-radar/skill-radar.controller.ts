@@ -43,8 +43,24 @@ export class SkillRadarController {
 
   @Roles("ADMIN")
   @Get("admin/events")
-  listAdminSkillScoreEvents(@Query("limit") limit?: string) {
-    return this.skillRadarService.listAdminSkillScoreEvents(Number(limit) || 30);
+  listAdminSkillScoreEvents(
+    @Query("limit") limit?: string,
+    @Query("page") page?: string,
+    @Query("userId") userId?: string,
+    @Query("positionId") positionId?: string,
+    @Query("skillId") skillId?: string,
+    @Query("sourceType") sourceType?: string,
+    @Query("search") search?: string,
+  ) {
+    return this.skillRadarService.listAdminSkillScoreEvents({
+      limit: Number(limit) || 30,
+      page: Number(page) || 1,
+      userId,
+      positionId,
+      skillId,
+      sourceType,
+      search,
+    });
   }
 
   @Roles("ADMIN")

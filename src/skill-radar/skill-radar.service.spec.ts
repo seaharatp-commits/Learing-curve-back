@@ -41,6 +41,7 @@ function makeService() {
     },
     skillScoreEvent: {
       findMany: jest.fn().mockResolvedValue([]),
+      count: jest.fn().mockResolvedValue(0),
       create: jest.fn().mockReturnValue({ id: "event-create" }),
     },
     userSkillScore: {
@@ -68,6 +69,54 @@ function makeService() {
   );
   return { service, prisma, aiService };
 }
+
+describe("SkillRadarService Phase 9 admin analytics", () => {
+  it("returns paginated admin skill score events with filters", async () => {
+    const { service, prisma } = makeService();
+    prisma.skillScoreEvent.findMany.mockResolvedValue([{ id: "event-1" }]);
+    prisma.skillScoreEvent.count.mockResolvedValue(42);
+
+    const result = await service.listAdminSkillScoreEvents({
+      page: 2,
+      limit: 10,
+      userId: "user-1",
+      positionId: "position-1",
+      skillId: "skill-backend",
+      sourceType: "AI_CHAT_QUESTION",
+      search: "api",
+    });
+
+    expect(prisma.skillScoreEvent.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        take: 10,
+        skip: 10,
+        where: expect.objectContaining({
+          userId: "user-1",
+          positionId: "position-1",
+          skillId: "skill-backend",
+          sourceType: "AI_CHAT_QUESTION",
+          OR: expect.any(Array),
+        }),
+      }),
+    );
+    expect(prisma.skillScoreEvent.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        userId: "user-1",
+        positionId: "position-1",
+        skillId: "skill-backend",
+        sourceType: "AI_CHAT_QUESTION",
+        OR: expect.any(Array),
+      }),
+    });
+    expect(result).toEqual({
+      items: [{ id: "event-1" }],
+      total: 42,
+      page: 2,
+      limit: 10,
+      totalPages: 5,
+    });
+  });
+});
 
 describe("SkillRadarService Phase 4/5 scoring", () => {
   it("does not treat short keywords as substring matches inside unrelated words", () => {
