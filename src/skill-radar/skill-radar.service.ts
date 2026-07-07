@@ -455,6 +455,23 @@ export class SkillRadarService {
     const question = input.question.trim();
     if (question.length < 3) return [];
     if (this.getMatchTokens(question).size < 2) return [];
+    const sourceType = input.sourceType ?? SKILL_SCORE_SOURCE_AI_CHAT_QUESTION;
+    const maxSkillEvents = Math.max(1, Math.min(input.maxSkillEvents ?? AI_CHAT_MAX_SKILL_EVENTS, 5));
+    const maxScoreDelta = Math.max(0.1, Math.min(input.maxScoreDelta ?? AI_CHAT_MAX_SCORE_DELTA, AI_CHAT_MAX_SCORE_DELTA));
+    const reasonPrefix = input.reasonPrefix ?? "AI chat question signal";
+
+    if (input.sourceId) {
+      const existingSourceEvents = await this.prisma.skillScoreEvent.findMany({
+        where: {
+          userId: input.userId,
+          sourceType,
+          sourceId: input.sourceId,
+        },
+        take: 1,
+        select: { id: true },
+      });
+      if (existingSourceEvents.length > 0) return [];
+    }
 
     const position = await this.resolveUserPosition(input.userId);
     const skills = await this.prisma.positionSkill.findMany({
@@ -485,7 +502,7 @@ export class SkillRadarService {
         (candidate) => candidate.confidence >= AI_CHAT_MIN_CONFIDENCE,
       );
     }
-    candidates = candidates.slice(0, AI_CHAT_MAX_SKILL_EVENTS);
+    candidates = candidates.slice(0, maxSkillEvents);
 
     const events = [];
     for (const candidate of candidates) {
@@ -493,7 +510,7 @@ export class SkillRadarService {
       const skillWeight = Math.min(skill?.weight ?? 1, 1.5);
       let scoreDelta =
         Math.round(
-          Math.min(AI_CHAT_MAX_SCORE_DELTA, candidate.confidence * AI_CHAT_MAX_SCORE_DELTA * skillWeight) * 100,
+          Math.min(maxScoreDelta, candidate.confidence * maxScoreDelta * skillWeight) * 100,
         ) / 100;
 
       if (scoreDelta <= 0) continue;
@@ -504,6 +521,7 @@ export class SkillRadarService {
         question,
         scoreDelta,
         input.sourceId ?? null,
+        sourceType,
       );
       scoreDelta = antiFarming.scoreDelta;
       if (scoreDelta <= 0) continue;
@@ -512,16 +530,51 @@ export class SkillRadarService {
         await this.recordSkillScoreEvent({
           userId: input.userId,
           skillId: candidate.skillId,
-          sourceType: SKILL_SCORE_SOURCE_AI_CHAT_QUESTION,
+          sourceType,
           sourceId: input.sourceId ?? null,
           scoreDelta,
           confidence: candidate.confidence,
-          reason: `AI chat question signal (${usedAiClassifier ? "ai-classifier" : "keyword-fallback"}): ${candidate.reason}${antiFarming.note ? ` | anti-farming: ${antiFarming.note}` : ""}`,
+          reason: `${reasonPrefix} (${usedAiClassifier ? "ai-classifier" : "keyword-fallback"}): ${candidate.reason}${antiFarming.note ? ` | anti-farming: ${antiFarming.note}` : ""}`,
         }),
       );
     }
 
     return events;
+  }
+
+  async analyzeUserTextSkills(userId: string, text: string, minConfidence = AI_CHAT_MIN_CONFIDENCE) {
+    const cleanText = text.trim();
+    if (cleanText.length < 3) return { candidates: [] as SkillAnalysisCandidate[], usedAiClassifier: false };
+    if (this.getMatchTokens(cleanText).size < 2) {
+      return { candidates: [] as SkillAnalysisCandidate[], usedAiClassifier: false };
+    }
+
+    const position = await this.resolveUserPosition(userId);
+    const skills = await this.prisma.positionSkill.findMany({
+      where: { positionId: position.id, isActive: true, position: { isActive: true } },
+      select: {
+        id: true,
+        positionId: true,
+        name: true,
+        description: true,
+        keywords: true,
+        weight: true,
+        isActive: true,
+      },
+    });
+
+    try {
+      const candidates = (await this.analyzeQuestionSkillsWithAi(cleanText, skills)).filter(
+        (candidate) => candidate.confidence >= minConfidence,
+      );
+      return { candidates, usedAiClassifier: true };
+    } catch (error) {
+      this.logger.warn(`AI skill classifier failed, falling back to keyword matching: ${error}`);
+      const candidates = this.analyzeQuestionSkills(cleanText, skills).filter(
+        (candidate) => candidate.confidence >= minConfidence,
+      );
+      return { candidates, usedAiClassifier: false };
+    }
   }
 
   async recordLessonCompletionSkillSignals(input: RecordLessonCompletionSkillSignalsInput) {
@@ -631,12 +684,13 @@ export class SkillRadarService {
     question: string,
     scoreDelta: number,
     sourceId: string | null,
+    sourceType = SKILL_SCORE_SOURCE_AI_CHAT_QUESTION,
   ): Promise<{ scoreDelta: number; note: string | null }> {
     const since = new Date(Date.now() - ANTI_FARMING_WINDOW_HOURS * 60 * 60 * 1000);
     const recentUserEvents = await this.prisma.skillScoreEvent.findMany({
       where: {
         userId,
-        sourceType: SKILL_SCORE_SOURCE_AI_CHAT_QUESTION,
+        sourceType,
         createdAt: { gte: since },
       },
       orderBy: { createdAt: "desc" },

@@ -32,6 +32,8 @@ const MIN_CONTENT_LENGTH = 50;
 const MAX_LESSON_QUIZ_CONTENT_LENGTH = 6000;
 const MAX_LESSON_QUIZ_FOCUS_LENGTH = 1200;
 const SKILL_SCORE_SOURCE_QUIZ_ATTEMPT = "QUIZ_ATTEMPT";
+const SKILL_SCORE_SOURCE_LESSON_TOPIC_CREATED = "LESSON_TOPIC_CREATED";
+const SKILL_SCORE_SOURCE_LESSON_CHAT_QUESTION = "LESSON_CHAT_QUESTION";
 const CORRECT_SKILL_SCORE_DELTA = 10;
 const WRONG_SKILL_SCORE_DELTA = 2;
 
@@ -210,6 +212,8 @@ export class QuizService {
     questionById: Map<
       string,
       {
+        questionText: string;
+        explanation?: string | null;
         skillMappings?: Array<{
           weight: number;
           skillId: string;
@@ -218,22 +222,54 @@ export class QuizService {
       }
     >,
   ) {
-    const scoreBySkillId = new Map<string, { delta: number; reasons: string[] }>();
+    const scoreBySkillId = new Map<string, { delta: number; reasons: string[]; confidence: number }>();
 
     for (const answer of answers) {
       const question = questionById.get(answer.questionId);
       const mappings = question?.skillMappings ?? [];
 
-      for (const mapping of mappings) {
+      if (mappings.length > 0) {
+        for (const mapping of mappings) {
+          const baseDelta = answer.isCorrect ? CORRECT_SKILL_SCORE_DELTA : WRONG_SKILL_SCORE_DELTA;
+          const skillWeight = mapping.skill?.weight ?? 1;
+          const delta = baseDelta * mapping.weight * skillWeight;
+          const current = scoreBySkillId.get(mapping.skillId) ?? {
+            delta: 0,
+            reasons: [],
+            confidence: 1,
+          };
+          current.delta += delta;
+          current.confidence = Math.max(current.confidence, 1);
+          current.reasons.push(
+            `${mapping.skill?.name ?? "Skill"}: ${answer.isCorrect ? "correct" : "wrong"} answer`,
+          );
+          scoreBySkillId.set(mapping.skillId, current);
+        }
+        continue;
+      }
+
+      if (!question) continue;
+      const analysisText = [question.questionText, question.explanation].filter(Boolean).join("\n");
+      const { candidates, usedAiClassifier } = await this.skillRadarService.analyzeUserTextSkills(
+        userId,
+        analysisText,
+        0.2,
+      );
+
+      for (const candidate of candidates.slice(0, 2)) {
         const baseDelta = answer.isCorrect ? CORRECT_SKILL_SCORE_DELTA : WRONG_SKILL_SCORE_DELTA;
-        const skillWeight = mapping.skill?.weight ?? 1;
-        const delta = baseDelta * mapping.weight * skillWeight;
-        const current = scoreBySkillId.get(mapping.skillId) ?? { delta: 0, reasons: [] };
+        const delta = baseDelta * candidate.confidence;
+        const current = scoreBySkillId.get(candidate.skillId) ?? {
+          delta: 0,
+          reasons: [],
+          confidence: 0,
+        };
         current.delta += delta;
+        current.confidence = Math.max(current.confidence, candidate.confidence);
         current.reasons.push(
-          `${mapping.skill?.name ?? "Skill"}: ${answer.isCorrect ? "correct" : "wrong"} answer`,
+          `${candidate.skillName}: ${answer.isCorrect ? "correct" : "wrong"} answer (${usedAiClassifier ? "ai-classifier" : "keyword-fallback"}: ${candidate.reason})`,
         );
-        scoreBySkillId.set(mapping.skillId, current);
+        scoreBySkillId.set(candidate.skillId, current);
       }
     }
 
@@ -244,9 +280,32 @@ export class QuizService {
         sourceType: SKILL_SCORE_SOURCE_QUIZ_ATTEMPT,
         sourceId: attemptId,
         scoreDelta: Math.round(score.delta * 100) / 100,
-        confidence: 1,
+        confidence: Math.round(score.confidence * 100) / 100,
         reason: score.reasons.join("; "),
       });
+    }
+  }
+
+  private async recordQuestionSkillSignalSafe(
+    userId: string,
+    question: string,
+    sourceId: string | null,
+    sourceType: string,
+    reasonPrefix: string,
+    maxScoreDelta = 1,
+  ) {
+    try {
+      await this.skillRadarService.recordQuestionSkillSignals({
+        userId,
+        question,
+        sourceId,
+        sourceType,
+        maxScoreDelta,
+        maxSkillEvents: 2,
+        reasonPrefix,
+      });
+    } catch (error) {
+      this.logger.warn(`Failed to record ${sourceType} skill signal: ${error}`);
     }
   }
 
@@ -461,6 +520,14 @@ export class QuizService {
     });
 
     this.logger.log(`Generated lesson ${lesson.id} from topic "${cleanTopic}"`);
+    await this.recordQuestionSkillSignalSafe(
+      user.id,
+      [cleanTopic, detail].filter(Boolean).join("\n"),
+      lesson.id,
+      SKILL_SCORE_SOURCE_LESSON_TOPIC_CREATED,
+      "Lesson topic creation signal",
+      1,
+    );
     return { lessonId: lesson.id, quizId: null, title: lesson.title };
   }
 
@@ -485,9 +552,25 @@ export class QuizService {
         maxTokens: 1000,
       });
 
+      await this.recordQuestionSkillSignalSafe(
+        user.id,
+        cleanMessage,
+        `lesson-chat:${lesson.id}:${Date.now()}`,
+        SKILL_SCORE_SOURCE_LESSON_CHAT_QUESTION,
+        "Lesson follow-up question signal",
+        2,
+      );
       return { answer: this.normalizeLessonChatAnswer(answer) };
     } catch (error) {
       this.logger.error(`AI failed to answer lesson follow-up: ${this.describeAiFailure(error)}`);
+      await this.recordQuestionSkillSignalSafe(
+        user.id,
+        cleanMessage,
+        `lesson-chat:${lesson.id}:${Date.now()}`,
+        SKILL_SCORE_SOURCE_LESSON_CHAT_QUESTION,
+        "Lesson follow-up question signal",
+        2,
+      );
       return { answer: this.fallbackLessonChatAnswer(lesson) };
     }
   }

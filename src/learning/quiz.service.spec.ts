@@ -46,7 +46,11 @@ function makeService() {
     quizAttempt: { create: jest.fn(), findMany: jest.fn() },
   };
   const aiService = { chat: jest.fn() };
-  const skillRadarService = { recordSkillScoreEvent: jest.fn() };
+  const skillRadarService = {
+    recordSkillScoreEvent: jest.fn(),
+    recordQuestionSkillSignals: jest.fn().mockResolvedValue([]),
+    analyzeUserTextSkills: jest.fn().mockResolvedValue({ candidates: [], usedAiClassifier: false }),
+  };
   const service = new QuizService(
     prisma as unknown as PrismaService,
     aiService as unknown as AiService,
@@ -151,7 +155,7 @@ describe("QuizService.generateFromArticle", () => {
 
 describe("QuizService.generateFromTopic", () => {
   it("creates a lesson without creating a quiz from a free-form topic", async () => {
-    const { service, prisma, aiService } = makeService();
+    const { service, prisma, aiService, skillRadarService } = makeService();
     aiService.chat.mockResolvedValue(VALID_TOPIC_JSON);
     prisma.lesson.aggregate.mockResolvedValue({ _max: { order: 4 } });
     prisma.lesson.create.mockResolvedValue({
@@ -179,6 +183,15 @@ describe("QuizService.generateFromTopic", () => {
       },
     });
     expect(prisma.quiz.create).not.toHaveBeenCalled();
+    expect(skillRadarService.recordQuestionSkillSignals).toHaveBeenCalledWith({
+      userId: "user-1",
+      question: expect.any(String),
+      sourceId: "lesson-1",
+      sourceType: "LESSON_TOPIC_CREATED",
+      maxScoreDelta: 1,
+      maxSkillEvents: 2,
+      reasonPrefix: "Lesson topic creation signal",
+    });
   });
 
   it("creates a lesson from a plain-text AI response when JSON is missing", async () => {
@@ -249,7 +262,7 @@ describe("QuizService.generateFromTopic", () => {
 
 describe("QuizService.askLessonQuestion", () => {
   it("answers a learner question using the lesson and chat history", async () => {
-    const { service, prisma, aiService } = makeService();
+    const { service, prisma, aiService, skillRadarService } = makeService();
     prisma.lesson.findUnique.mockResolvedValue({
       id: "lesson-1",
       title: "Lesson 1",
@@ -267,6 +280,15 @@ describe("QuizService.askLessonQuestion", () => {
       ]),
       { temperature: 0.5, maxTokens: 1000 },
     );
+    expect(skillRadarService.recordQuestionSkillSignals).toHaveBeenCalledWith({
+      userId: "user-1",
+      question: "What next?",
+      sourceId: expect.stringMatching(/^lesson-chat:lesson-1:/),
+      sourceType: "LESSON_CHAT_QUESTION",
+      maxScoreDelta: 2,
+      maxSkillEvents: 2,
+      reasonPrefix: "Lesson follow-up question signal",
+    });
   });
 
   it("normalizes a JSON-shaped lesson chat answer before returning it to the UI", async () => {
@@ -440,6 +462,60 @@ describe("QuizService.submitAttempt", () => {
       scoreDelta: 12,
       confidence: 1,
       reason: "BackEnd: correct answer; BackEnd: wrong answer",
+    });
+  });
+
+  it("uses AI skill analysis for quiz attempts when questions have no skill mapping", async () => {
+    const { service, prisma, skillRadarService } = makeService();
+    skillRadarService.analyzeUserTextSkills.mockResolvedValue({
+      usedAiClassifier: true,
+      candidates: [
+        {
+          skillId: "skill-devops",
+          skillName: "DevOps",
+          confidence: 0.8,
+          reason: "Question mentions deployment workflow",
+        },
+      ],
+    });
+    prisma.quiz.findUnique.mockResolvedValue({
+      id: "quiz-1",
+      createdByUserId: "user-1",
+      lessonId: "lesson-1",
+      questions: [
+        {
+          id: "q1",
+          questionText: "What is the correct deployment workflow?",
+          correctIndex: 1,
+          explanation: "Use a safe deployment workflow.",
+          options: ["a", "b", "c", "d"],
+          skillMappings: [],
+        },
+      ],
+    });
+    prisma.quizAttempt.create.mockResolvedValue({
+      id: "attempt-1",
+      submittedAt: new Date("2026-07-06T09:00:00.000Z"),
+    });
+
+    await service.submitAttempt(user, "quiz-1", {
+      answers: [{ questionId: "q1", selectedIndex: 1 }],
+    });
+
+    expect(skillRadarService.analyzeUserTextSkills).toHaveBeenCalledWith(
+      "user-1",
+      "What is the correct deployment workflow?\nUse a safe deployment workflow.",
+      0.2,
+    );
+    expect(skillRadarService.recordSkillScoreEvent).toHaveBeenCalledWith({
+      userId: "user-1",
+      skillId: "skill-devops",
+      sourceType: "QUIZ_ATTEMPT",
+      sourceId: "attempt-1",
+      scoreDelta: 8,
+      confidence: 0.8,
+      reason:
+        "DevOps: correct answer (ai-classifier: Question mentions deployment workflow)",
     });
   });
 

@@ -47,6 +47,10 @@ export interface RecordQuestionSkillSignalsInput {
   userId: string;
   question: string;
   sourceId?: string | null;
+  sourceType?: string;
+  maxScoreDelta?: number;
+  maxSkillEvents?: number;
+  reasonPrefix?: string;
 }
 
 export interface PositionSkillSuggestion {
