@@ -166,3 +166,60 @@ describe("SkillRadarService Phase 4/5 scoring", () => {
     expect(prisma.userSkillScore.upsert).not.toHaveBeenCalled();
   });
 });
+
+describe("SkillRadarService Phase 7 lesson behavior scoring", () => {
+  it("records small skill score events from lesson completion title and content signals", async () => {
+    const { service, prisma } = makeService();
+    prisma.positionSkill.findMany.mockResolvedValue([
+      makeSkill({ id: "skill-backend", name: "BackEnd", keywords: ["api", "database", "auth"] }),
+      makeSkill({ id: "skill-devops", name: "DevOps", keywords: ["docker", "deploy"] }),
+    ]);
+
+    const events = await service.recordLessonCompletionSkillSignals({
+      userId: "user-1",
+      lessonId: "lesson-1",
+      lessonTitle: "API authentication with database",
+      lessonContent: "This lesson explains auth flow, API routing, and database schema design.",
+    });
+
+    expect(events.length).toBeGreaterThan(0);
+    expect(prisma.skillScoreEvent.findMany).toHaveBeenCalledWith({
+      where: {
+        userId: "user-1",
+        sourceType: "LESSON_COMPLETION",
+        sourceId: "lesson-1",
+      },
+      take: 1,
+      select: { id: true },
+    });
+    expect(prisma.skillScoreEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: "user-1",
+        skillId: "skill-backend",
+        sourceType: "LESSON_COMPLETION",
+        sourceId: "lesson-1",
+        scoreDelta: expect.any(Number),
+        confidence: expect.any(Number),
+        reason: expect.stringContaining("Lesson completion signal"),
+      }),
+    });
+    const createArg = prisma.skillScoreEvent.create.mock.calls[0][0];
+    expect(createArg.data.scoreDelta).toBeLessThanOrEqual(1.2);
+  });
+
+  it("does not record lesson completion score twice for the same user and lesson", async () => {
+    const { service, prisma } = makeService();
+    prisma.skillScoreEvent.findMany.mockResolvedValueOnce([{ id: "existing-event" }]);
+
+    const events = await service.recordLessonCompletionSkillSignals({
+      userId: "user-1",
+      lessonId: "lesson-1",
+      lessonTitle: "API authentication",
+      lessonContent: "API auth database",
+    });
+
+    expect(events).toEqual([]);
+    expect(prisma.positionSkill.findMany).not.toHaveBeenCalled();
+    expect(prisma.skillScoreEvent.create).not.toHaveBeenCalled();
+  });
+});

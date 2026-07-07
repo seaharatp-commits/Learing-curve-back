@@ -39,7 +39,10 @@ const POSITION_SKILL_SUGGESTION_MAX = 7;
 const SKILL_SCORE_SOURCE_LESSON_COMPLETION = "LESSON_COMPLETION";
 const LESSON_COMPLETION_MIN_CONFIDENCE = 0.2;
 const LESSON_COMPLETION_MAX_SKILL_EVENTS = 2;
-const LESSON_COMPLETION_MAX_SCORE_DELTA = 1.5;
+const LESSON_COMPLETION_MAX_SCORE_DELTA = 1.2;
+const LESSON_COMPLETION_MAX_CONTENT_LENGTH = 4000;
+const LESSON_COMPLETION_TITLE_WEIGHT = 1.2;
+const LESSON_COMPLETION_CONTENT_WEIGHT = 0.7;
 const BUILT_IN_SKILL_KEYWORDS: Record<string, string[]> = {
   frontend: ["front end", "หน้าเว็บ", "หน้าจอ", "ปุ่ม", "ฟอร์ม", "responsive", "component"],
   backend: ["back end", "api", "ฐานข้อมูล", "ล็อกอิน", "login", "auth", "server"],
@@ -476,8 +479,26 @@ export class SkillRadarService {
   }
 
   async recordLessonCompletionSkillSignals(input: RecordLessonCompletionSkillSignalsInput) {
-    const text = input.lessonText.trim();
+    const title = (input.lessonTitle ?? "").trim();
+    const content = (input.lessonContent ?? input.lessonText ?? "").trim();
+    const limitedContent =
+      content.length > LESSON_COMPLETION_MAX_CONTENT_LENGTH
+        ? `${content.slice(0, LESSON_COMPLETION_MAX_CONTENT_LENGTH).trim()}...`
+        : content;
+    const text = [title, limitedContent].filter(Boolean).join("\n").trim();
     if (text.length < 3) return [];
+    if (this.getMatchTokens(text).size < 2) return [];
+
+    const existingLessonEvents = await this.prisma.skillScoreEvent.findMany({
+      where: {
+        userId: input.userId,
+        sourceType: SKILL_SCORE_SOURCE_LESSON_COMPLETION,
+        sourceId: input.lessonId,
+      },
+      take: 1,
+      select: { id: true },
+    });
+    if (existingLessonEvents.length > 0) return [];
 
     const position = await this.resolveUserPosition(input.userId);
     const skills = await this.prisma.positionSkill.findMany({
@@ -494,8 +515,38 @@ export class SkillRadarService {
     });
 
     const skillById = new Map(skills.map((skill) => [skill.id, skill]));
-    const candidates = this.analyzeQuestionSkills(text, skills)
+    const titleCandidates = title ? this.analyzeQuestionSkills(title, skills) : [];
+    const contentCandidates = limitedContent ? this.analyzeQuestionSkills(limitedContent, skills) : [];
+    const mergedCandidates = new Map<string, SkillAnalysisCandidate>();
+
+    for (const candidate of titleCandidates) {
+      mergedCandidates.set(candidate.skillId, {
+        ...candidate,
+        confidence: Math.min(1, candidate.confidence * LESSON_COMPLETION_TITLE_WEIGHT),
+        reason: `title match: ${candidate.reason}`,
+      });
+    }
+
+    for (const candidate of contentCandidates) {
+      const adjustedConfidence = Math.min(1, candidate.confidence * LESSON_COMPLETION_CONTENT_WEIGHT);
+      const existing = mergedCandidates.get(candidate.skillId);
+      if (!existing || adjustedConfidence > existing.confidence) {
+        mergedCandidates.set(candidate.skillId, {
+          ...candidate,
+          confidence: adjustedConfidence,
+          reason: `content match: ${candidate.reason}`,
+        });
+      } else {
+        mergedCandidates.set(candidate.skillId, {
+          ...existing,
+          reason: `${existing.reason}; content also matched: ${candidate.reason}`,
+        });
+      }
+    }
+
+    const candidates = Array.from(mergedCandidates.values())
       .filter((candidate) => candidate.confidence >= LESSON_COMPLETION_MIN_CONFIDENCE)
+      .sort((a, b) => b.confidence - a.confidence)
       .slice(0, LESSON_COMPLETION_MAX_SKILL_EVENTS);
 
     const events = [];

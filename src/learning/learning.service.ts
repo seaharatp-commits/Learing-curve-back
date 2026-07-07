@@ -125,7 +125,8 @@ export class LearningService {
         .recordLessonCompletionSkillSignals({
           userId,
           lessonId,
-          lessonText: `${lesson.title}\n${lesson.content}`,
+          lessonTitle: lesson.title,
+          lessonContent: lesson.content,
         })
         .catch((error) => {
           this.logger.warn(`Failed to record lesson completion skill signal: ${error}`);

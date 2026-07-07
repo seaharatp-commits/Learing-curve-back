@@ -58,5 +58,7 @@ export interface PositionSkillSuggestion {
 export interface RecordLessonCompletionSkillSignalsInput {
   userId: string;
   lessonId: string;
-  lessonText: string;
+  lessonTitle?: string;
+  lessonContent?: string;
+  lessonText?: string;
 }
