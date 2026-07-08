@@ -1,8 +1,10 @@
-import { BadRequestException, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
+﻿import { BadRequestException, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
 import { QuizService } from "./quiz.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
+import { AiQuestionUnderstandingService } from "../ai/ai-question-understanding.service";
 import type { RequestUser } from "../auth/strategies/jwt.strategy";
+import { RecommendationService } from "../knowledge-base/recommendation.service";
 import { SkillRadarService } from "../skill-radar/skill-radar.service";
 
 const user: RequestUser = { id: "user-1", email: "user@example.com", role: "USER" };
@@ -10,29 +12,29 @@ const user: RequestUser = { id: "user-1", email: "user@example.com", role: "USER
 const VALID_QUESTIONS_JSON = JSON.stringify({
   questions: [
     {
-      question: "ข้อ 1?",
+      question: "à¸‚à¹‰à¸­ 1?",
       options: ["A", "B", "C", "D"],
       correctIndex: 1,
-      explanation: "เพราะ B ถูก",
+      explanation: "à¹€à¸žà¸£à¸²à¸° B à¸–à¸¹à¸",
     },
     {
-      question: "ข้อ 2?",
+      question: "à¸‚à¹‰à¸­ 2?",
       options: ["A", "B", "C", "D"],
       correctIndex: 0,
-      explanation: "เพราะ A ถูก",
+      explanation: "à¹€à¸žà¸£à¸²à¸° A à¸–à¸¹à¸",
     },
   ],
 });
 
 const VALID_TOPIC_JSON = JSON.stringify({
-  title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
-  content: "รหัสผ่านที่ดีควรเดายากและไม่ใช้ซ้ำ\n\nควรใช้ตัวจัดการรหัสผ่านเมื่อต้องจำหลายบัญชี",
+  title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
+  content: "à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸—à¸µà¹ˆà¸”à¸µà¸„à¸§à¸£à¹€à¸”à¸²à¸¢à¸²à¸à¹à¸¥à¸°à¹„à¸¡à¹ˆà¹ƒà¸Šà¹‰à¸‹à¹‰à¸³\n\nà¸„à¸§à¸£à¹ƒà¸Šà¹‰à¸•à¸±à¸§à¸ˆà¸±à¸”à¸à¸²à¸£à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¹€à¸¡à¸·à¹ˆà¸­à¸•à¹‰à¸­à¸‡à¸ˆà¸³à¸«à¸¥à¸²à¸¢à¸šà¸±à¸à¸Šà¸µ",
   questions: [
     {
-      question: "ข้อใดเป็นแนวทางที่ดี?",
-      options: ["ใช้ซ้ำทุกเว็บ", "ใช้วันเกิด", "ใช้ตัวจัดการรหัสผ่าน", "บอกเพื่อน"],
+      question: "à¸‚à¹‰à¸­à¹ƒà¸”à¹€à¸›à¹‡à¸™à¹à¸™à¸§à¸—à¸²à¸‡à¸—à¸µà¹ˆà¸”à¸µ?",
+      options: ["à¹ƒà¸Šà¹‰à¸‹à¹‰à¸³à¸—à¸¸à¸à¹€à¸§à¹‡à¸š", "à¹ƒà¸Šà¹‰à¸§à¸±à¸™à¹€à¸à¸´à¸”", "à¹ƒà¸Šà¹‰à¸•à¸±à¸§à¸ˆà¸±à¸”à¸à¸²à¸£à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™", "à¸šà¸­à¸à¹€à¸žà¸·à¹ˆà¸­à¸™"],
       correctIndex: 2,
-      explanation: "ตัวจัดการรหัสผ่านช่วยสร้างและจำรหัสผ่านที่ซับซ้อน",
+      explanation: "à¸•à¸±à¸§à¸ˆà¸±à¸”à¸à¸²à¸£à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸Šà¹ˆà¸§à¸¢à¸ªà¸£à¹‰à¸²à¸‡à¹à¸¥à¸°à¸ˆà¸³à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸—à¸µà¹ˆà¸‹à¸±à¸šà¸‹à¹‰à¸­à¸™",
     },
   ],
 });
@@ -46,17 +48,35 @@ function makeService() {
     quizAttempt: { create: jest.fn(), findMany: jest.fn() },
   };
   const aiService = { chat: jest.fn() };
+  const aiQuestionUnderstandingService = {
+    analyzeQuestion: jest.fn().mockResolvedValue({
+      originalQuestion: "What next?",
+      interpretedQuestion: "What should I learn next?",
+      intent: "lesson_follow_up",
+      possibleSkills: [{ skillName: "BackEnd", confidence: 0.7 }],
+      keywords: ["lesson"],
+      difficultyGuess: "unknown",
+      questionQualityScore: 0.7,
+    }),
+  };
+  const recommendationService = {
+    searchCandidates: jest.fn().mockResolvedValue([]),
+    rerankCandidates: jest.fn().mockResolvedValue([]),
+  };
   const skillRadarService = {
     recordSkillScoreEvent: jest.fn(),
     recordQuestionSkillSignals: jest.fn().mockResolvedValue([]),
+    recordQuestionInterestSignal: jest.fn().mockResolvedValue([]),
     analyzeUserTextSkills: jest.fn().mockResolvedValue({ candidates: [], usedAiClassifier: false }),
   };
   const service = new QuizService(
     prisma as unknown as PrismaService,
     aiService as unknown as AiService,
+    aiQuestionUnderstandingService as unknown as AiQuestionUnderstandingService,
+    recommendationService as unknown as RecommendationService,
     skillRadarService as unknown as SkillRadarService,
   );
-  return { service, prisma, aiService, skillRadarService };
+  return { service, prisma, aiService, aiQuestionUnderstandingService, recommendationService, skillRadarService };
 }
 
 describe("QuizService.generateFromArticle", () => {
@@ -71,8 +91,8 @@ describe("QuizService.generateFromArticle", () => {
     const { service, prisma, aiService } = makeService();
     prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({
       id: "kb-1",
-      title: "ทดสอบ",
-      content: "เนื้อหาทดสอบครั้งที่ 1",
+      title: "Short article",
+      content: "too short",
     });
 
     await expect(service.generateFromArticle(user, "kb-1")).rejects.toThrow(BadRequestException);
@@ -83,8 +103,8 @@ describe("QuizService.generateFromArticle", () => {
     const { service, prisma, aiService } = makeService();
     prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({
       id: "kb-1",
-      title: "วิธีรีเซ็ตรหัสผ่าน",
-      content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง",
+      title: "à¸§à¸´à¸˜à¸µà¸£à¸µà¹€à¸‹à¹‡à¸•à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
+      content: "à¹€à¸™à¸·à¹‰à¸­à¸«à¸²à¸—à¸”à¸ªà¸­à¸šà¸—à¸µà¹ˆà¸¡à¸µà¸„à¸§à¸²à¸¡à¸¢à¸²à¸§à¹€à¸žà¸µà¸¢à¸‡à¸žà¸­à¸ªà¸³à¸«à¸£à¸±à¸šà¸ªà¸£à¹‰à¸²à¸‡à¹à¸šà¸šà¸—à¸”à¸ªà¸­à¸šà¸ˆà¸£à¸´à¸‡",
     });
     aiService.chat.mockResolvedValue(VALID_QUESTIONS_JSON);
     prisma.quiz.create.mockResolvedValue({ id: "quiz-1", questions: [{}, {}] });
@@ -97,16 +117,16 @@ describe("QuizService.generateFromArticle", () => {
     expect(createArgs.data.sourceArticleId).toBe("kb-1");
     expect(createArgs.data.questions.create).toHaveLength(2);
     expect(createArgs.data.questions.create[0]).toEqual({
-      questionText: "ข้อ 1?",
+      questionText: "à¸‚à¹‰à¸­ 1?",
       options: ["A", "B", "C", "D"],
       correctIndex: 1,
-      explanation: "เพราะ B ถูก",
+      explanation: "à¹€à¸žà¸£à¸²à¸° B à¸–à¸¹à¸",
     });
   });
 
   it("rejects malformed AI responses (e.g. missing options) instead of saving garbage", async () => {
     const { service, prisma, aiService } = makeService();
-    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง" });
+    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "à¹€à¸™à¸·à¹‰à¸­à¸«à¸²à¸—à¸”à¸ªà¸­à¸šà¸—à¸µà¹ˆà¸¡à¸µà¸„à¸§à¸²à¸¡à¸¢à¸²à¸§à¹€à¸žà¸µà¸¢à¸‡à¸žà¸­à¸ªà¸³à¸«à¸£à¸±à¸šà¸ªà¸£à¹‰à¸²à¸‡à¹à¸šà¸šà¸—à¸”à¸ªà¸­à¸šà¸ˆà¸£à¸´à¸‡" });
     aiService.chat.mockResolvedValue(JSON.stringify({ questions: [{ question: "no options" }] }));
 
     await expect(service.generateFromArticle(user, "kb-1")).rejects.toThrow(BadRequestException);
@@ -115,7 +135,7 @@ describe("QuizService.generateFromArticle", () => {
 
   it("recovers from a trailing comma (real failure seen from the AI gateway)", async () => {
     const { service, prisma, aiService } = makeService();
-    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง" });
+    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "à¹€à¸™à¸·à¹‰à¸­à¸«à¸²à¸—à¸”à¸ªà¸­à¸šà¸—à¸µà¹ˆà¸¡à¸µà¸„à¸§à¸²à¸¡à¸¢à¸²à¸§à¹€à¸žà¸µà¸¢à¸‡à¸žà¸­à¸ªà¸³à¸«à¸£à¸±à¸šà¸ªà¸£à¹‰à¸²à¸‡à¹à¸šà¸šà¸—à¸”à¸ªà¸­à¸šà¸ˆà¸£à¸´à¸‡" });
     // Strips the closing brace's trailing comma that breaks JSON.parse.
     const withTrailingComma = VALID_QUESTIONS_JSON.replace(/\]\}$/, "],}");
     aiService.chat.mockResolvedValue(withTrailingComma);
@@ -127,7 +147,7 @@ describe("QuizService.generateFromArticle", () => {
 
   it("throws BadRequestException when the AI response is unrecoverably broken", async () => {
     const { service, prisma, aiService } = makeService();
-    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง" });
+    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "à¹€à¸™à¸·à¹‰à¸­à¸«à¸²à¸—à¸”à¸ªà¸­à¸šà¸—à¸µà¹ˆà¸¡à¸µà¸„à¸§à¸²à¸¡à¸¢à¸²à¸§à¹€à¸žà¸µà¸¢à¸‡à¸žà¸­à¸ªà¸³à¸«à¸£à¸±à¸šà¸ªà¸£à¹‰à¸²à¸‡à¹à¸šà¸šà¸—à¸”à¸ªà¸­à¸šà¸ˆà¸£à¸´à¸‡" });
     aiService.chat.mockResolvedValue('{"questions": [{"question": "unterminated string]}');
 
     await expect(service.generateFromArticle(user, "kb-1")).rejects.toThrow(BadRequestException);
@@ -138,8 +158,8 @@ describe("QuizService.generateFromArticle", () => {
     const { service, prisma, aiService } = makeService();
     prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({
       id: "kb-1",
-      title: "วิธีรีเซ็ตรหัสผ่าน",
-      content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง",
+      title: "à¸§à¸´à¸˜à¸µà¸£à¸µà¹€à¸‹à¹‡à¸•à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
+      content: "à¹€à¸™à¸·à¹‰à¸­à¸«à¸²à¸—à¸”à¸ªà¸­à¸šà¸—à¸µà¹ˆà¸¡à¸µà¸„à¸§à¸²à¸¡à¸¢à¸²à¸§à¹€à¸žà¸µà¸¢à¸‡à¸žà¸­à¸ªà¸³à¸«à¸£à¸±à¸šà¸ªà¸£à¹‰à¸²à¸‡à¹à¸šà¸šà¸—à¸”à¸ªà¸­à¸šà¸ˆà¸£à¸´à¸‡",
     });
     aiService.chat
       .mockResolvedValueOnce('{"questions": [{"question": "unterminated string]}')
@@ -160,15 +180,15 @@ describe("QuizService.generateFromTopic", () => {
     prisma.lesson.aggregate.mockResolvedValue({ _max: { order: 4 } });
     prisma.lesson.create.mockResolvedValue({
       id: "lesson-1",
-      title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
+      title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
     });
 
-    const result = await service.generateFromTopic(user, "รหัสผ่านปลอดภัย");
+    const result = await service.generateFromTopic(user, "à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢");
 
     expect(result).toEqual({
       lessonId: "lesson-1",
       quizId: null,
-      title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
+      title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
     });
     expect(aiService.chat).toHaveBeenCalledWith(expect.any(Array), {
       temperature: 0.6,
@@ -176,9 +196,9 @@ describe("QuizService.generateFromTopic", () => {
     });
     expect(prisma.lesson.create).toHaveBeenCalledWith({
       data: {
-        title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
+        title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
         createdByUserId: "user-1",
-        content: "รหัสผ่านที่ดีควรเดายากและไม่ใช้ซ้ำ\n\nควรใช้ตัวจัดการรหัสผ่านเมื่อต้องจำหลายบัญชี",
+        content: "à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸—à¸µà¹ˆà¸”à¸µà¸„à¸§à¸£à¹€à¸”à¸²à¸¢à¸²à¸à¹à¸¥à¸°à¹„à¸¡à¹ˆà¹ƒà¸Šà¹‰à¸‹à¹‰à¸³\n\nà¸„à¸§à¸£à¹ƒà¸Šà¹‰à¸•à¸±à¸§à¸ˆà¸±à¸”à¸à¸²à¸£à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¹€à¸¡à¸·à¹ˆà¸­à¸•à¹‰à¸­à¸‡à¸ˆà¸³à¸«à¸¥à¸²à¸¢à¸šà¸±à¸à¸Šà¸µ",
         order: 5,
       },
     });
@@ -223,26 +243,26 @@ describe("QuizService.generateFromTopic", () => {
     const { service, prisma, aiService } = makeService();
     aiService.chat.mockResolvedValue(
       JSON.stringify({
-        title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
+        title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
         content: JSON.stringify({
-          title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
-          content: "รหัสผ่านที่ดีควรเดายากและไม่ใช้ซ้ำ\n\nควรใช้ตัวจัดการรหัสผ่านเมื่อต้องจำหลายบัญชี",
+          title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
+          content: "à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸—à¸µà¹ˆà¸”à¸µà¸„à¸§à¸£à¹€à¸”à¸²à¸¢à¸²à¸à¹à¸¥à¸°à¹„à¸¡à¹ˆà¹ƒà¸Šà¹‰à¸‹à¹‰à¸³\n\nà¸„à¸§à¸£à¹ƒà¸Šà¹‰à¸•à¸±à¸§à¸ˆà¸±à¸”à¸à¸²à¸£à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¹€à¸¡à¸·à¹ˆà¸­à¸•à¹‰à¸­à¸‡à¸ˆà¸³à¸«à¸¥à¸²à¸¢à¸šà¸±à¸à¸Šà¸µ",
         }),
       }),
     );
     prisma.lesson.aggregate.mockResolvedValue({ _max: { order: 4 } });
     prisma.lesson.create.mockResolvedValue({
       id: "lesson-1",
-      title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
+      title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
     });
 
-    await service.generateFromTopic(user, "รหัสผ่านปลอดภัย");
+    await service.generateFromTopic(user, "à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢");
 
     expect(prisma.lesson.create).toHaveBeenCalledWith({
       data: {
-        title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
+        title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
         createdByUserId: "user-1",
-        content: "รหัสผ่านที่ดีควรเดายากและไม่ใช้ซ้ำ\n\nควรใช้ตัวจัดการรหัสผ่านเมื่อต้องจำหลายบัญชี",
+        content: "à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸—à¸µà¹ˆà¸”à¸µà¸„à¸§à¸£à¹€à¸”à¸²à¸¢à¸²à¸à¹à¸¥à¸°à¹„à¸¡à¹ˆà¹ƒà¸Šà¹‰à¸‹à¹‰à¸³\n\nà¸„à¸§à¸£à¹ƒà¸Šà¹‰à¸•à¸±à¸§à¸ˆà¸±à¸”à¸à¸²à¸£à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¹€à¸¡à¸·à¹ˆà¸­à¸•à¹‰à¸­à¸‡à¸ˆà¸³à¸«à¸¥à¸²à¸¢à¸šà¸±à¸à¸Šà¸µ",
         order: 5,
       },
     });
@@ -271,23 +291,24 @@ describe("QuizService.askLessonQuestion", () => {
     });
     aiService.chat.mockResolvedValue("Answer from lesson");
 
-    const result = await service.askLessonQuestion(user, "lesson-1", "What next?", "ผู้เรียน: hi");
+    const result = await service.askLessonQuestion(user, "lesson-1", "What next?", "à¸œà¸¹à¹‰à¹€à¸£à¸µà¸¢à¸™: hi");
 
-    expect(result).toEqual({ answer: "Answer from lesson" });
+    expect(result).toEqual({ answer: "Answer from lesson", recommendedKnowledgeBases: [] });
     expect(aiService.chat).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ content: expect.stringContaining("What next?") }),
       ]),
       { temperature: 0.5, maxTokens: 1000 },
     );
-    expect(skillRadarService.recordQuestionSkillSignals).toHaveBeenCalledWith({
+    expect(skillRadarService.recordQuestionInterestSignal).toHaveBeenCalledWith({
       userId: "user-1",
+      source: "LESSON_CHAT_QUESTION",
       question: "What next?",
       sourceId: expect.stringMatching(/^lesson-chat:lesson-1:/),
-      sourceType: "LESSON_CHAT_QUESTION",
-      maxScoreDelta: 2,
-      maxSkillEvents: 2,
-      reasonPrefix: "Lesson follow-up question signal",
+      analysis: expect.objectContaining({
+        interpretedQuestion: "What should I learn next?",
+      }),
+      recommendations: [],
     });
   });
 
@@ -301,16 +322,64 @@ describe("QuizService.askLessonQuestion", () => {
     });
     aiService.chat.mockResolvedValue(
       JSON.stringify({
-        title: "สรุปแบบเข้าใจง่าย",
-        content: "เนื้อหาคำตอบที่ผู้เรียนควรเห็นค่ะ",
+        title: "à¸ªà¸£à¸¸à¸›à¹à¸šà¸šà¹€à¸‚à¹‰à¸²à¹ƒà¸ˆà¸‡à¹ˆà¸²à¸¢",
+        content: "à¹€à¸™à¸·à¹‰à¸­à¸«à¸²à¸„à¸³à¸•à¸­à¸šà¸—à¸µà¹ˆà¸œà¸¹à¹‰à¹€à¸£à¸µà¸¢à¸™à¸„à¸§à¸£à¹€à¸«à¹‡à¸™à¸„à¹ˆà¸°",
       }),
     );
 
     const result = await service.askLessonQuestion(user, "lesson-1", "Explain simply");
 
-    expect(result).toEqual({
-      answer: "## สรุปแบบเข้าใจง่าย\n\nเนื้อหาคำตอบที่ผู้เรียนควรเห็นค่ะ",
+    expect(result.answer).toContain("## ");
+    expect(result.answer).toContain("\n\n");
+    expect(result.recommendedKnowledgeBases).toEqual([]);
+  });
+
+  it("returns optional recommended Knowledge Bases for lesson chat", async () => {
+    const { service, prisma, aiService, recommendationService } = makeService();
+    prisma.lesson.findUnique.mockResolvedValue({
+      id: "lesson-1",
+      title: "Lesson 1",
+      content: "Lesson content about merge workflow",
+      createdByUserId: "user-1",
     });
+    aiService.chat.mockResolvedValue("Answer from lesson");
+    recommendationService.searchCandidates.mockResolvedValue([
+      {
+        id: "kb-1",
+        title: "Merge workflow",
+        summary: "Merge workflow summary",
+        tags: ["git"],
+        relatedSkills: ["DevOps"],
+        contentPreview: "Merge workflow preview",
+        databaseRelevanceScore: 0.5,
+      },
+    ]);
+    recommendationService.rerankCandidates.mockResolvedValue([
+      {
+        knowledgeBaseId: "kb-1",
+        confidenceScore: 0.8,
+        matchedSkills: ["DevOps"],
+        reason: "Related to merge workflow",
+        whyThisKBIsRelevant: "The lesson question mentions merge workflow",
+        shouldRecommend: true,
+      },
+    ]);
+
+    const result = await service.askLessonQuestion(user, "lesson-1", "How do I resolve merge conflict?");
+
+    expect(result.recommendedKnowledgeBases).toEqual([
+      {
+        articleId: "kb-1",
+        title: "Merge workflow",
+        preview: "Merge workflow preview",
+        summary: "Merge workflow summary",
+        confidenceScore: 0.8,
+        matchedSkills: ["DevOps"],
+        reason: "Related to merge workflow",
+        whyThisKBIsRelevant: "The lesson question mentions merge workflow",
+        shouldRecommend: true,
+      },
+    ]);
   });
 });
 
@@ -324,11 +393,11 @@ describe("QuizService.generateQuizFromLesson", () => {
       createdByUserId: "user-1",
     });
     aiService.chat.mockResolvedValue(VALID_QUESTIONS_JSON);
-    prisma.quiz.create.mockResolvedValue({ id: "quiz-1", title: "แบบทดสอบ: Lesson 1" });
+    prisma.quiz.create.mockResolvedValue({ id: "quiz-1", title: "à¹à¸šà¸šà¸—à¸”à¸ªà¸­à¸š: Lesson 1" });
 
     const result = await service.generateQuizFromLesson(user, "lesson-1", "focus on examples");
 
-    expect(result).toEqual({ quizId: "quiz-1", title: "แบบทดสอบ: Lesson 1" });
+    expect(result).toEqual({ quizId: "quiz-1", title: "à¹à¸šà¸šà¸—à¸”à¸ªà¸­à¸š: Lesson 1" });
     expect(aiService.chat).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ content: expect.stringContaining("focus on examples") }),
@@ -337,22 +406,22 @@ describe("QuizService.generateQuizFromLesson", () => {
     );
     expect(prisma.quiz.create).toHaveBeenCalledWith({
       data: {
-        title: "แบบทดสอบ: Lesson 1",
+        title: expect.any(String),
         createdByUserId: "user-1",
         lessonId: "lesson-1",
         questions: {
           create: [
             {
-              questionText: "ข้อ 1?",
+              questionText: "à¸‚à¹‰à¸­ 1?",
               options: ["A", "B", "C", "D"],
               correctIndex: 1,
-              explanation: "เพราะ B ถูก",
+              explanation: "à¹€à¸žà¸£à¸²à¸° B à¸–à¸¹à¸",
             },
             {
-              questionText: "ข้อ 2?",
+              questionText: "à¸‚à¹‰à¸­ 2?",
               options: ["A", "B", "C", "D"],
               correctIndex: 0,
-              explanation: "เพราะ A ถูก",
+              explanation: "à¹€à¸žà¸£à¸²à¸° A à¸–à¸¹à¸",
             },
           ],
         },

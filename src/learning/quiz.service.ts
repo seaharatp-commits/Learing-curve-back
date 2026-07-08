@@ -10,7 +10,14 @@ import type { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import type { AiChatMessage } from "../ai/ai.types";
+import { AiQuestionUnderstandingService } from "../ai/ai-question-understanding.service";
+import type {
+  KnowledgeBaseCandidate,
+  KnowledgeBaseRecommendation,
+  QuestionAnalysisResult,
+} from "../ai/ai-question-understanding.types";
 import type { RequestUser } from "../auth/strategies/jwt.strategy";
+import { RecommendationService } from "../knowledge-base/recommendation.service";
 import { SkillRadarService } from "../skill-radar/skill-radar.service";
 import type { SubmitAttemptDto } from "./dto/submit-attempt.dto";
 import type {
@@ -55,6 +62,24 @@ const TOPIC_LESSON_SYSTEM_PROMPT =
 const LESSON_ASSISTANT_STYLE_PROMPT =
   "Answer in a friendly, clear, beginner-friendly Thai teaching style. Use short paragraphs. Use clean numbered steps only when order matters. Use bullet points for causes, notes, and warnings. Do not output raw JSON. Avoid excessive bold text. Do not output broken or unclosed Markdown such as **text or text** without a matching pair. For troubleshooting answers, use these headings when useful: สาเหตุที่เป็นไปได้:, วิธีแก้เบื้องต้น:, ข้อควรระวัง:, ถ้ายังไม่หาย:. If the answer involves BIOS, UEFI, Secure Boot, TPM, boot settings, disk settings, or security settings, warn the learner to be careful, avoid random BIOS changes, ask for the device or motherboard model when needed, and avoid overconfident advice when details are missing.";
 
+interface LessonRecommendedKnowledgeBase {
+  articleId: string;
+  title: string;
+  preview: string | null;
+  summary?: string | null;
+  confidenceScore: number;
+  matchedSkills: string[];
+  reason: string;
+  whyThisKBIsRelevant: string;
+  shouldRecommend: boolean;
+}
+
+interface LessonRecommendationFlowResult {
+  analysis: QuestionAnalysisResult | null;
+  recommendations: KnowledgeBaseRecommendation[];
+  recommendedKnowledgeBases: LessonRecommendedKnowledgeBase[];
+}
+
 @Injectable()
 export class QuizService {
   private readonly logger = new Logger(QuizService.name);
@@ -62,6 +87,8 @@ export class QuizService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiService: AiService,
+    private readonly aiQuestionUnderstandingService: AiQuestionUnderstandingService,
+    private readonly recommendationService: RecommendationService,
     private readonly skillRadarService: SkillRadarService,
   ) {}
 
@@ -309,6 +336,95 @@ export class QuizService {
     }
   }
 
+  private buildLessonRecommendedKnowledgeBases(
+    recommendations: KnowledgeBaseRecommendation[],
+    candidates: KnowledgeBaseCandidate[],
+  ): LessonRecommendedKnowledgeBase[] {
+    const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+    const items: LessonRecommendedKnowledgeBase[] = [];
+
+    for (const recommendation of recommendations) {
+      const candidate = candidateById.get(recommendation.knowledgeBaseId);
+      if (!candidate) continue;
+      items.push({
+        articleId: candidate.id,
+        title: candidate.title,
+        preview: candidate.contentPreview ?? candidate.summary ?? null,
+        summary: candidate.summary ?? null,
+        confidenceScore: recommendation.confidenceScore,
+        matchedSkills: recommendation.matchedSkills,
+        reason: recommendation.reason,
+        whyThisKBIsRelevant: recommendation.whyThisKBIsRelevant,
+        shouldRecommend: recommendation.shouldRecommend,
+      });
+    }
+
+    return items;
+  }
+
+  private async getLessonRecommendationFlow(
+    userId: string,
+    lesson: { id: string; title: string; content: string },
+    question: string,
+  ): Promise<LessonRecommendationFlowResult> {
+    try {
+      const analysis = await this.aiQuestionUnderstandingService.analyzeQuestion({
+        userId,
+        question,
+        contextType: "LESSON_CHAT",
+        lessonId: lesson.id,
+        lessonTitle: lesson.title,
+        lessonSummary: this.limitText(lesson.content, 800),
+        lessonSkills: [],
+      });
+      const candidates = await this.recommendationService.searchCandidates({
+        originalQuestion: analysis.originalQuestion,
+        interpretedQuestion: analysis.interpretedQuestion,
+        keywords: analysis.keywords,
+        possibleSkills: analysis.possibleSkills,
+        limit: 20,
+      });
+      const recommendations = await this.recommendationService.rerankCandidates({
+        analysis,
+        candidates,
+      });
+
+      this.logger.log(
+        `Lesson chat KB recommendation flow: lesson=${lesson.id}, fallback=${analysis.fallbackUsed === true}, candidates=${candidates.length}, selected=${recommendations.map((recommendation) => `${recommendation.knowledgeBaseId}:${recommendation.confidenceScore}`).join(",") || "none"}`,
+      );
+
+      return {
+        analysis,
+        recommendations,
+        recommendedKnowledgeBases: this.buildLessonRecommendedKnowledgeBases(recommendations, candidates),
+      };
+    } catch (error) {
+      this.logger.warn(`Lesson chat KB recommendation flow failed, continuing without recommendations: ${error}`);
+      return { analysis: null, recommendations: [], recommendedKnowledgeBases: [] };
+    }
+  }
+
+  private async recordLessonChatInterestSignalSafe(
+    userId: string,
+    question: string,
+    sourceId: string,
+    flow: LessonRecommendationFlowResult,
+  ) {
+    if (!flow.analysis) return;
+    try {
+      await this.skillRadarService.recordQuestionInterestSignal({
+        userId,
+        source: "LESSON_CHAT_QUESTION",
+        question,
+        sourceId,
+        analysis: flow.analysis,
+        recommendations: flow.recommendations,
+      });
+    } catch (error) {
+      this.logger.warn(`Failed to record lesson chat interest signal: ${error}`);
+    }
+  }
+
   private parseJsonObject(raw: string): Record<string, unknown> {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("AI response did not contain JSON");
@@ -546,32 +662,27 @@ export class QuizService {
       throw new NotFoundException("ไม่พบบทเรียนนี้");
     }
 
+    const sourceId = `lesson-chat:${lesson.id}:${Date.now()}`;
+    const recommendationFlow = await this.getLessonRecommendationFlow(user.id, lesson, cleanMessage);
+
     try {
       const answer = await this.aiService.chat(this.buildLessonChatMessages(lesson, cleanMessage, chatHistory), {
         temperature: 0.5,
         maxTokens: 1000,
       });
 
-      await this.recordQuestionSkillSignalSafe(
-        user.id,
-        cleanMessage,
-        `lesson-chat:${lesson.id}:${Date.now()}`,
-        SKILL_SCORE_SOURCE_LESSON_CHAT_QUESTION,
-        "Lesson follow-up question signal",
-        2,
-      );
-      return { answer: this.normalizeLessonChatAnswer(answer) };
+      await this.recordLessonChatInterestSignalSafe(user.id, cleanMessage, sourceId, recommendationFlow);
+      return {
+        answer: this.normalizeLessonChatAnswer(answer),
+        recommendedKnowledgeBases: recommendationFlow.recommendedKnowledgeBases,
+      };
     } catch (error) {
       this.logger.error(`AI failed to answer lesson follow-up: ${this.describeAiFailure(error)}`);
-      await this.recordQuestionSkillSignalSafe(
-        user.id,
-        cleanMessage,
-        `lesson-chat:${lesson.id}:${Date.now()}`,
-        SKILL_SCORE_SOURCE_LESSON_CHAT_QUESTION,
-        "Lesson follow-up question signal",
-        2,
-      );
-      return { answer: this.fallbackLessonChatAnswer(lesson) };
+      await this.recordLessonChatInterestSignalSafe(user.id, cleanMessage, sourceId, recommendationFlow);
+      return {
+        answer: this.fallbackLessonChatAnswer(lesson),
+        recommendedKnowledgeBases: recommendationFlow.recommendedKnowledgeBases,
+      };
     }
   }
 

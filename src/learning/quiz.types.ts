@@ -23,6 +23,17 @@ export interface GeneratedLessonQuizResult {
 
 export interface LessonChatResult {
   answer: string;
+  recommendedKnowledgeBases?: Array<{
+    articleId: string;
+    title: string;
+    preview: string | null;
+    summary?: string | null;
+    confidenceScore: number;
+    matchedSkills: string[];
+    reason: string;
+    whyThisKBIsRelevant: string;
+    shouldRecommend: boolean;
+  }>;
 }
 
 export interface QuizListItem {
