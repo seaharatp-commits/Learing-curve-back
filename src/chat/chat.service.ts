@@ -2,6 +2,11 @@ import { ForbiddenException, Injectable, Logger, NotFoundException } from "@nest
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import type { AiChatMessage } from "../ai/ai.types";
+import { AiQuestionUnderstandingService } from "../ai/ai-question-understanding.service";
+import type {
+  KnowledgeBaseCandidate,
+  KnowledgeBaseRecommendation,
+} from "../ai/ai-question-understanding.types";
 import { RecommendationService } from "../knowledge-base/recommendation.service";
 import { SkillRadarService } from "../skill-radar/skill-radar.service";
 import { SendMessageDto } from "./dto/send-message.dto";
@@ -43,6 +48,18 @@ const BASE_SYSTEM_PROMPT = `${SYSTEM_PROMPT}\n\n${CLEAN_ENDING_PROMPT}\n\n${LIST
 
 const SELECTED_KB_SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}\n\n${SELECTED_KB_FOLLOW_UP_PROMPT}`;
 
+export interface ChatRecommendedKnowledgeBase {
+  articleId: string;
+  title: string;
+  preview: string | null;
+  summary?: string | null;
+  confidenceScore: number;
+  matchedSkills: string[];
+  reason: string;
+  whyThisKBIsRelevant: string;
+  shouldRecommend: boolean;
+}
+
 @Injectable()
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
@@ -50,6 +67,7 @@ export class ChatService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiService: AiService,
+    private readonly aiQuestionUnderstandingService: AiQuestionUnderstandingService,
     private readonly recommendationService: RecommendationService,
     private readonly skillRadarService: SkillRadarService,
   ) {}
@@ -179,6 +197,65 @@ export class ChatService {
     }
   }
 
+  private buildRecommendedKnowledgeBases(
+    recommendations: KnowledgeBaseRecommendation[],
+    candidates: KnowledgeBaseCandidate[],
+  ): ChatRecommendedKnowledgeBase[] {
+    const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+    const items: ChatRecommendedKnowledgeBase[] = [];
+
+    for (const recommendation of recommendations) {
+      const candidate = candidateById.get(recommendation.knowledgeBaseId);
+      if (!candidate) continue;
+      items.push({
+        articleId: candidate.id,
+        title: candidate.title,
+        preview: candidate.contentPreview ?? candidate.summary ?? null,
+        summary: candidate.summary ?? null,
+        confidenceScore: recommendation.confidenceScore,
+        matchedSkills: recommendation.matchedSkills,
+        reason: recommendation.reason,
+        whyThisKBIsRelevant: recommendation.whyThisKBIsRelevant,
+        shouldRecommend: recommendation.shouldRecommend,
+      });
+    }
+
+    return items;
+  }
+
+  private async getRecommendedKnowledgeBases(
+    userId: string,
+    content: string,
+  ): Promise<ChatRecommendedKnowledgeBase[]> {
+    try {
+      const analysis = await this.aiQuestionUnderstandingService.analyzeQuestion({
+        userId,
+        question: content,
+        contextType: "GENERAL_CHAT",
+      });
+      const candidates = await this.recommendationService.searchCandidates({
+        originalQuestion: analysis.originalQuestion,
+        interpretedQuestion: analysis.interpretedQuestion,
+        keywords: analysis.keywords,
+        possibleSkills: analysis.possibleSkills,
+        limit: 20,
+      });
+      const recommendations = await this.recommendationService.rerankCandidates({
+        analysis,
+        candidates,
+      });
+
+      this.logger.log(
+        `Chat KB recommendation flow: fallback=${analysis.fallbackUsed === true}, candidates=${candidates.length}, selected=${recommendations.map((recommendation) => `${recommendation.knowledgeBaseId}:${recommendation.confidenceScore}`).join(",") || "none"}`,
+      );
+
+      return this.buildRecommendedKnowledgeBases(recommendations, candidates);
+    } catch (error) {
+      this.logger.warn(`Chat KB recommendation flow failed, continuing without recommendations: ${error}`);
+      return [];
+    }
+  }
+
   async sendMessage(userId: string, dto: SendMessageDto) {
     let session = dto.sessionId
       ? await this.prisma.chatSession.findUnique({ where: { id: dto.sessionId } })
@@ -219,6 +296,7 @@ export class ChatService {
       knowledge ?? undefined,
       sourceConfidenceScore,
     );
+    const recommendedKnowledgeBases = await this.getRecommendedKnowledgeBases(userId, dto.content);
 
     const userMessage = await this.prisma.chatMessage.create({
       data: { sessionId: session.id, role: "USER", content: dto.content },
@@ -237,7 +315,7 @@ export class ChatService {
       },
     });
 
-    return { session, messages: [userMessage, aiMessage] };
+    return { session, messages: [userMessage, aiMessage], recommendedKnowledgeBases };
   }
 
   async getSessionMessages(userId: string, sessionId: string) {
