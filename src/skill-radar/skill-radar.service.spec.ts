@@ -129,6 +129,21 @@ describe("SkillRadarService Phase 4/5 scoring", () => {
     expect(result).toEqual([]);
   });
 
+  it("maps Data Flow Diagram questions to System Analysis", () => {
+    const { service } = makeService();
+
+    const result = service.analyzeQuestionSkills("แผนภาพกระแสข้อมูล (Data Flow Diagram) คืออะไร", [
+      makeSkill({ id: "skill-system-analysis", name: "System Analysis", keywords: [] }),
+      makeSkill({ id: "skill-backend", name: "BackEnd", keywords: ["api", "database"] }),
+    ]);
+
+    expect(result[0]).toMatchObject({
+      skillId: "skill-system-analysis",
+      skillName: "System Analysis",
+    });
+    expect(result[0].confidence).toBeGreaterThanOrEqual(0.2);
+  });
+
   it("records AI chat skill signals only for skills in the learner selected position", async () => {
     const { service, prisma, aiService } = makeService();
     prisma.positionSkill.findMany.mockResolvedValue([
