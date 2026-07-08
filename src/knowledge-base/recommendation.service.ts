@@ -13,47 +13,13 @@ import type {
 } from "../ai/ai-question-understanding.types";
 
 const MIN_CONFIDENCE = 0.1;
-const SAME_CATEGORY_BOOST = 0.1;
 const MAX_RESULTS = 5;
-const PRIMARY_MATCH_BOOST = 0.05;
-const EXACT_TITLE_BOOST = 0.12;
-const CONTENT_ONLY_PENALTY = 0.08;
-const VAGUE_QUERY_PENALTY = 0.06;
 const ARTICLE_BATCH_SIZE = 12;
 const CANDIDATE_PREVIEW_LENGTH = 500;
 const CANDIDATE_MIN_DATABASE_SCORE = 0.03;
 const RERANK_MIN_CONFIDENCE = 0.1;
 const RERANK_MAX_RESULTS = 5;
 const RERANK_OPTIONS = { temperature: 0.1, maxTokens: 700 };
-
-const GENERIC_TOKENS = new Set([
-  "the",
-  "and",
-  "for",
-  "with",
-  "how",
-  "what",
-  "why",
-  "แก้",
-  "แก้ไข",
-  "ทำ",
-  "ทำยังไง",
-  "วิธี",
-  "ขั้นตอน",
-  "ปัญหา",
-  "ระบบ",
-  "ข้อมูล",
-  "ใช้งาน",
-  "ไม่ได้",
-  "อยากรู้",
-  "ช่วย",
-  "บอก",
-  "เกี่ยวกับ",
-  "ขอ",
-  "หน่อย",
-  "อธิบาย",
-  "คืออะไร",
-]);
 
 type ArticleWithCategory = KnowledgeBaseArticle & { category: Category };
 
@@ -95,10 +61,6 @@ const SELECT_SYSTEM_PROMPT =
   "ตอบกลับเป็น JSON array เท่านั้น ไม่มีคำอธิบายอื่น ไม่ใช้ markdown หรือ code fence " +
   "ถ้าไม่มีบทความใดเกี่ยวข้องเลยให้ตอบ [] " +
   'รูปแบบแต่ละรายการ: {"articleId": string, "confidenceScore": number (0-1), "explanation": string (ภาษาไทยสั้นๆ)}';
-
-function withoutGenericTokens(tokens: Set<string>) {
-  return new Set([...tokens].filter((token) => !GENERIC_TOKENS.has(token)));
-}
 
 function chunk<T>(items: T[], size: number): T[][] {
   const batches: T[][] = [];
@@ -197,14 +159,12 @@ export class RecommendationService {
 
   async searchCandidates(input: SearchCandidatesInput): Promise<KnowledgeBaseCandidate[]> {
     const limit = Math.max(1, Math.min(input.limit ?? 20, 30));
-    const queryFingerprint = withoutGenericTokens(
-      buildFingerprint([
-        input.originalQuestion,
-        input.interpretedQuestion,
-        ...input.keywords,
-        ...input.possibleSkills.map((skill) => skill.skillName),
-      ]),
-    );
+    const queryFingerprint = buildFingerprint([
+      input.originalQuestion,
+      input.interpretedQuestion,
+      ...input.keywords,
+      ...input.possibleSkills.map((skill) => skill.skillName),
+    ]);
 
     if (queryFingerprint.size === 0) return [];
 
@@ -271,8 +231,8 @@ export class RecommendationService {
 
       return this.normalizeRerankReply(reply, input.candidates);
     } catch (error) {
-      this.logger.warn(`AI KB reranking failed, falling back to database score: ${error}`);
-      return this.fallbackRerankByDatabaseScore(input.candidates);
+      this.logger.warn(`AI ล่ม: KB reranking unavailable: ${error}`);
+      throw new Error(`AI ล่ม: KB reranking unavailable (${error})`);
     }
   }
 
@@ -359,25 +319,8 @@ export class RecommendationService {
       .slice(0, RERANK_MAX_RESULTS);
   }
 
-  private fallbackRerankByDatabaseScore(candidates: KnowledgeBaseCandidate[]): KnowledgeBaseRecommendation[] {
-    return candidates
-      .filter((candidate) => (candidate.databaseRelevanceScore ?? 0) >= RERANK_MIN_CONFIDENCE)
-      .sort((a, b) => (b.databaseRelevanceScore ?? 0) - (a.databaseRelevanceScore ?? 0))
-      .slice(0, RERANK_MAX_RESULTS)
-      .map((candidate) => ({
-        knowledgeBaseId: candidate.id,
-        confidenceScore: Math.round(Math.min(0.49, candidate.databaseRelevanceScore ?? 0) * 100) / 100,
-        matchedSkills: candidate.relatedSkills,
-        reason: "Fallback database relevance score",
-        whyThisKBIsRelevant: "AI reranking was unavailable, so this item was selected by local relevance score.",
-        shouldRecommend: (candidate.databaseRelevanceScore ?? 0) >= 0.5,
-      }));
-  }
-
   async recommend(query: RecommendQueryDto): Promise<RecommendationResult[]> {
-    const queryFingerprint = withoutGenericTokens(
-      buildFingerprint([query.title, query.description ?? ""]),
-    );
+    const queryFingerprint = buildFingerprint([query.title, query.description ?? ""]);
     if (queryFingerprint.size === 0) return [];
 
     const articles = (await this.prisma.knowledgeBaseArticle.findMany({
@@ -388,8 +331,8 @@ export class RecommendationService {
     try {
       return await this.recommendWithAi(query, articles);
     } catch (error) {
-      this.logger.warn(`AI-based recommendation failed, falling back to keyword matching: ${error}`);
-      return this.recommendWithKeywordMatching(query, articles, queryFingerprint);
+      this.logger.warn(`AI ล่ม: AI-based recommendation unavailable: ${error}`);
+      throw new Error(`AI ล่ม: AI-based recommendation unavailable (${error})`);
     }
   }
 
@@ -496,93 +439,4 @@ export class RecommendationService {
       }));
   }
 
-  // Deterministic keyword/token-overlap fallback, used only if the AI Center is
-  // unreachable or returns something unparseable, so recommend() never hard-fails.
-  private recommendWithKeywordMatching(
-    query: RecommendQueryDto,
-    articles: ArticleWithCategory[],
-    queryFingerprint: Set<string>,
-  ): RecommendationResult[] {
-    const normalizedQuery = [query.title, query.description ?? ""].join(" ").toLowerCase();
-
-    const results: RecommendationResult[] = articles.map((article) => {
-      const keywords = Array.isArray(article.keywords) ? article.keywords : [];
-      const tags = Array.isArray(article.tags) ? article.tags : [];
-      const primaryParts = [...keywords, ...tags, article.title, article.summary ?? ""];
-      const contentParts = [
-        article.content,
-        article.symptoms ?? "",
-        article.rootCause ?? "",
-        article.resolution ?? "",
-      ];
-
-      const titleFingerprint = buildFingerprint([article.title]);
-      const keywordFingerprint = buildFingerprint(keywords);
-      const tagFingerprint = buildFingerprint(tags);
-      const summaryFingerprint = buildFingerprint([article.summary ?? ""]);
-      const contentFingerprint = buildFingerprint(contentParts);
-      const primaryFingerprint = buildFingerprint(primaryParts);
-
-      const coverage = (target: Set<string>) =>
-        target.size === 0 ? 0 : sharedTokens(queryFingerprint, target).length / queryFingerprint.size;
-
-      const primaryMatches = sharedTokens(queryFingerprint, primaryFingerprint);
-      const sameCategory = query.category ? article.category.name === query.category : false;
-
-      const titleScore = coverage(titleFingerprint);
-      const keywordScore = coverage(keywordFingerprint);
-      const tagScore = coverage(tagFingerprint);
-      const summaryScore = coverage(summaryFingerprint);
-      const contentScore = coverage(contentFingerprint);
-      const primaryScore = jaccardScore(queryFingerprint, primaryFingerprint);
-      const matchedPrimaryFields = [titleScore > 0, keywordScore > 0, tagScore > 0, summaryScore > 0].filter(
-        Boolean,
-      ).length;
-      const fieldDiversityBoost = Math.min(0.06, Math.max(0, matchedPrimaryFields - 1) * 0.02);
-      const titleText = article.title.toLowerCase();
-      const exactTitleBoost =
-        titleText.length >= 3 && (normalizedQuery.includes(titleText) || titleText.includes(normalizedQuery))
-          ? EXACT_TITLE_BOOST
-          : 0;
-      const contentOnlyPenalty = primaryMatches.length === 0 && contentScore > 0 ? CONTENT_ONLY_PENALTY : 0;
-      const vagueQueryPenalty = queryFingerprint.size <= 1 ? VAGUE_QUERY_PENALTY : 0;
-
-      const confidenceScore = Math.min(
-        1,
-        Math.max(
-          0,
-          titleScore * 0.35 +
-            keywordScore * 0.25 +
-            tagScore * 0.15 +
-            summaryScore * 0.15 +
-            contentScore * 0.05 +
-            primaryScore * 0.05 +
-            fieldDiversityBoost +
-            exactTitleBoost +
-            (primaryMatches.length > 0 ? PRIMARY_MATCH_BOOST : 0) +
-            (sameCategory ? SAME_CATEGORY_BOOST : 0) -
-            contentOnlyPenalty -
-            vagueQueryPenalty,
-        ),
-      );
-
-      return {
-        articleId: article.id,
-        title: article.title,
-        category: article.category.name,
-        preview: (article.summary ?? article.resolution ?? article.content ?? "").slice(0, 180),
-        summary: article.summary,
-        resolution: article.resolution,
-        confidenceScore: Math.round(confidenceScore * 100) / 100,
-        matchedKeywords: sharedTokens(queryFingerprint, buildFingerprint([...primaryParts, ...contentParts])),
-        sameCategory,
-        explanation: "จับคู่ด้วยคำสำคัญ (สำรองกรณี AI Center ใช้งานไม่ได้)",
-      };
-    });
-
-    return results
-      .filter((result) => result.confidenceScore >= MIN_CONFIDENCE)
-      .sort((a, b) => b.confidenceScore - a.confidenceScore)
-      .slice(0, MAX_RESULTS);
-  }
 }

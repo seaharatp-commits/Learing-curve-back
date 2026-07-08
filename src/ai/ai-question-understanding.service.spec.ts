@@ -35,19 +35,28 @@ describe("AiQuestionUnderstandingService", () => {
     expect(result.keywords).toContain("Next.js");
   });
 
-  it("falls back safely when AI analysis fails", async () => {
+  it("throws an AI-down error instead of falling back to keyword extraction when AI analysis fails", async () => {
     aiService.chat.mockRejectedValue(new Error("AI unavailable"));
 
+    await expect(
+      service.analyzeQuestion({
+        userId: "user-1",
+        question: "ช่วยอธิบาย Secure Boot TPM Valorant",
+        contextType: "GENERAL_CHAT",
+      }),
+    ).rejects.toThrow(/AI ล่ม/);
+  });
+
+  it("returns an empty analysis without calling the AI for a blank question", async () => {
     const result = await service.analyzeQuestion({
       userId: "user-1",
-      question: "ช่วยอธิบาย Secure Boot TPM Valorant",
+      question: "   ",
       contextType: "GENERAL_CHAT",
     });
 
-    expect(result.fallbackUsed).toBe(true);
-    expect(result.interpretedQuestion).toBe("ช่วยอธิบาย Secure Boot TPM Valorant");
+    expect(aiService.chat).not.toHaveBeenCalled();
+    expect(result.intent).toBe("empty_question");
     expect(result.possibleSkills).toEqual([]);
-    expect(result.keywords).toEqual(expect.arrayContaining(["secure", "boot", "tpm", "valorant"]));
-    expect(result.questionQualityScore).toBe(0.5);
+    expect(result.keywords).toEqual([]);
   });
 });

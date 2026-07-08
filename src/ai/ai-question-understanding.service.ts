@@ -20,34 +20,6 @@ const DIFFICULTY_VALUES = new Set<DifficultyGuess>([
   "unknown",
 ]);
 
-const GENERIC_TOKENS = new Set([
-  "the",
-  "and",
-  "for",
-  "with",
-  "what",
-  "why",
-  "how",
-  "please",
-  "help",
-  "about",
-  "want",
-  "know",
-  "อยากรู้",
-  "ช่วย",
-  "บอก",
-  "เกี่ยวกับ",
-  "ขอ",
-  "หน่อย",
-  "อธิบาย",
-  "คืออะไร",
-  "ทำยังไง",
-  "วิธี",
-  "ขั้นตอน",
-  "ปัญหา",
-  "ระบบ",
-]);
-
 const ANALYSIS_SYSTEM_PROMPT = [
   "You are analyzing a learner question for a learning platform.",
   "Do not answer the question. Only analyze it.",
@@ -108,7 +80,16 @@ export class AiQuestionUnderstandingService {
   async analyzeQuestion(input: QuestionAnalysisInput): Promise<QuestionAnalysisResult> {
     const originalQuestion = input.question.trim();
     if (!originalQuestion) {
-      return this.buildFallbackResult(input, "");
+      return {
+        originalQuestion: "",
+        interpretedQuestion: "",
+        intent: "empty_question",
+        possibleSkills: [],
+        keywords: [],
+        difficultyGuess: "unknown",
+        questionQualityScore: 0.25,
+        fallbackUsed: false,
+      };
     }
 
     try {
@@ -122,8 +103,8 @@ export class AiQuestionUnderstandingService {
 
       return this.normalizeAnalysisResult(input, reply);
     } catch (error) {
-      this.logger.warn(`AI question analysis failed, using fallback: ${error}`);
-      return this.buildFallbackResult(input, originalQuestion);
+      this.logger.warn(`AI ล่ม: question analysis unavailable: ${error}`);
+      throw new Error(`AI ล่ม: question analysis unavailable (${error})`);
     }
   }
 
@@ -215,37 +196,4 @@ export class AiQuestionUnderstandingService {
       : "unknown";
   }
 
-  private buildFallbackResult(
-    input: QuestionAnalysisInput,
-    originalQuestion: string,
-  ): QuestionAnalysisResult {
-    const question = originalQuestion || input.question.trim();
-    return {
-      originalQuestion: question,
-      interpretedQuestion: question,
-      intent: question ? "unknown" : "empty_question",
-      possibleSkills: [],
-      keywords: this.extractFallbackKeywords(question),
-      difficultyGuess: "unknown",
-      questionQualityScore: question.length >= 8 ? 0.5 : 0.25,
-      fallbackUsed: true,
-    };
-  }
-
-  private extractFallbackKeywords(question: string): string[] {
-    const tokens = question.toLowerCase().match(/[a-z0-9ก-๙+#._-]+/g) ?? [];
-    const keywords: string[] = [];
-    const seen = new Set<string>();
-
-    for (const token of tokens) {
-      const cleanToken = token.trim();
-      if (cleanToken.length < 2 || GENERIC_TOKENS.has(cleanToken)) continue;
-      if (seen.has(cleanToken)) continue;
-      seen.add(cleanToken);
-      keywords.push(cleanToken);
-      if (keywords.length >= MAX_KEYWORDS) break;
-    }
-
-    return keywords;
-  }
 }

@@ -46,47 +46,10 @@ const LESSON_COMPLETION_MIN_CONFIDENCE = 0.2;
 const LESSON_COMPLETION_MAX_SKILL_EVENTS = 2;
 const LESSON_COMPLETION_MAX_SCORE_DELTA = 1.2;
 const LESSON_COMPLETION_MAX_CONTENT_LENGTH = 4000;
-const LESSON_COMPLETION_TITLE_WEIGHT = 1.2;
-const LESSON_COMPLETION_CONTENT_WEIGHT = 0.7;
 const BASE_INTEREST_POINT = 0.5;
 const MIN_INTEREST_QUESTION_QUALITY = 0.45;
 const MIN_INTEREST_SKILL_CONFIDENCE = 0.45;
 const MAX_INTEREST_GAIN_PER_QUESTION = 1;
-const BUILT_IN_SKILL_KEYWORDS: Record<string, string[]> = {
-  frontend: ["front end", "หน้าเว็บ", "หน้าจอ", "ปุ่ม", "ฟอร์ม", "responsive", "component"],
-  backend: ["back end", "api", "ฐานข้อมูล", "ล็อกอิน", "login", "auth", "server"],
-  devops: ["docker", "deploy", "deployment", "git", "merge", "workflow", "pipeline"],
-  testing: ["test", "ทดสอบ", "bug", "error", "validation", "qa"],
-  "system analysis": [
-    "requirement",
-    "workflow",
-    "use case",
-    "analysis",
-    "system analysis",
-    "data flow diagram",
-    "data flow",
-    "dfd",
-    "context diagram",
-    "process flow",
-    "วิเคราะห์",
-    "ออกแบบระบบ",
-    "แผนภาพกระแสข้อมูล",
-    "กระแสข้อมูล",
-    "ผังการไหลของข้อมูล",
-    "แผนภาพบริบท",
-  ],
-  database: ["database", "ฐานข้อมูล", "sql", "postgres", "postgresql", "schema", "prisma", "query"],
-  troubleshooting: ["troubleshoot", "แก้ปัญหา", "error", "diagnose", "fix"],
-  networking: ["network", "ip", "dns", "wifi", "router"],
-  hardware: ["hardware", "device", "printer", "pc", "laptop"],
-  "operating systems": ["windows", "macos", "linux", "os"],
-  "security basics": ["security", "password", "permission", "malware", "secure boot", "tpm"],
-  "user research": ["research", "interview", "persona", "user need"],
-  wireframing: ["wireframe", "flow", "layout", "structure"],
-  "visual design": ["color", "typography", "visual", "spacing"],
-  prototyping: ["prototype", "figma", "interaction", "mockup"],
-  "design systems": ["design system", "component", "token", "style guide"],
-};
 
 interface AdminSkillScoreEventQuery {
   limit?: number;
@@ -361,47 +324,6 @@ export class SkillRadarService {
     return buildFingerprint([value]);
   }
 
-  private keywordMatches(question: string, keyword: string): boolean {
-    const cleanKeyword = keyword.trim().toLowerCase();
-    if (!cleanKeyword) return false;
-
-    const normalizedKeyword = this.normalizeForMatch(cleanKeyword);
-    const normalizedQuestion = this.normalizeForMatch(question);
-
-    if (normalizedKeyword.length <= 3) {
-      return this.getMatchTokens(question).has(cleanKeyword);
-    }
-
-    return normalizedQuestion.includes(normalizedKeyword);
-  }
-
-  private getSkillKeywords(skill: SkillRadarSkill): string[] {
-    const skillName = skill.name.toLowerCase();
-    const builtInKeywords = BUILT_IN_SKILL_KEYWORDS[skillName] ?? [];
-    return Array.from(new Set([...skill.keywords, ...builtInKeywords, skill.name]));
-  }
-
-  analyzeQuestionSkills(question: string, skills: SkillRadarSkill[]): SkillAnalysisCandidate[] {
-    return skills
-      .map((skill) => {
-        const matchedKeywords = this.getSkillKeywords(skill).filter((keyword) =>
-          this.keywordMatches(question, keyword),
-        );
-        const confidence = Math.min(1, matchedKeywords.length * 0.2);
-        return {
-          skillId: skill.id,
-          skillName: skill.name,
-          confidence,
-          reason:
-            matchedKeywords.length > 0
-              ? `Matched keywords: ${matchedKeywords.join(", ")}`
-              : "No strong keyword match",
-        };
-      })
-      .filter((candidate) => candidate.confidence > 0)
-      .sort((a, b) => b.confidence - a.confidence);
-  }
-
   private buildSkillClassifierPrompt(question: string, skills: SkillRadarSkill[]): string {
     const cleanQuestion =
       question.length > AI_CLASSIFIER_MAX_QUESTION_LENGTH
@@ -515,17 +437,13 @@ export class SkillRadarService {
     const skillById = new Map(skills.map((skill) => [skill.id, skill]));
 
     let candidates: SkillAnalysisCandidate[];
-    let usedAiClassifier = true;
     try {
       candidates = (await this.analyzeQuestionSkillsWithAi(question, skills)).filter(
         (candidate) => candidate.confidence >= AI_CLASSIFIER_MIN_CONFIDENCE,
       );
     } catch (error) {
-      usedAiClassifier = false;
-      this.logger.warn(`AI skill classifier failed, falling back to keyword matching: ${error}`);
-      candidates = this.analyzeQuestionSkills(question, skills).filter(
-        (candidate) => candidate.confidence >= AI_CHAT_MIN_CONFIDENCE,
-      );
+      this.logger.warn(`AI ล่ม: skill classifier unavailable, skipping skill signal: ${error}`);
+      return [];
     }
     candidates = candidates.slice(0, maxSkillEvents);
 
@@ -559,7 +477,7 @@ export class SkillRadarService {
           sourceId: input.sourceId ?? null,
           scoreDelta,
           confidence: candidate.confidence,
-          reason: `${reasonPrefix} (${usedAiClassifier ? "ai-classifier" : "keyword-fallback"}): ${candidate.reason}${antiFarming.note ? ` | anti-farming: ${antiFarming.note}` : ""}`,
+          reason: `${reasonPrefix} (ai-classifier): ${candidate.reason}${antiFarming.note ? ` | anti-farming: ${antiFarming.note}` : ""}`,
         }),
       );
     }
@@ -700,11 +618,8 @@ export class SkillRadarService {
       );
       return { candidates, usedAiClassifier: true };
     } catch (error) {
-      this.logger.warn(`AI skill classifier failed, falling back to keyword matching: ${error}`);
-      const candidates = this.analyzeQuestionSkills(cleanText, skills).filter(
-        (candidate) => candidate.confidence >= minConfidence,
-      );
-      return { candidates, usedAiClassifier: false };
+      this.logger.warn(`AI ล่ม: skill classifier unavailable, skipping skill inference: ${error}`);
+      return { candidates: [] as SkillAnalysisCandidate[], usedAiClassifier: false };
     }
   }
 
@@ -745,39 +660,17 @@ export class SkillRadarService {
     });
 
     const skillById = new Map(skills.map((skill) => [skill.id, skill]));
-    const titleCandidates = title ? this.analyzeQuestionSkills(title, skills) : [];
-    const contentCandidates = limitedContent ? this.analyzeQuestionSkills(limitedContent, skills) : [];
-    const mergedCandidates = new Map<string, SkillAnalysisCandidate>();
 
-    for (const candidate of titleCandidates) {
-      mergedCandidates.set(candidate.skillId, {
-        ...candidate,
-        confidence: Math.min(1, candidate.confidence * LESSON_COMPLETION_TITLE_WEIGHT),
-        reason: `title match: ${candidate.reason}`,
-      });
+    let candidates: SkillAnalysisCandidate[];
+    try {
+      candidates = (await this.analyzeQuestionSkillsWithAi(text, skills)).filter(
+        (candidate) => candidate.confidence >= LESSON_COMPLETION_MIN_CONFIDENCE,
+      );
+    } catch (error) {
+      this.logger.warn(`AI ล่ม: skill classifier unavailable, skipping lesson completion skill signal: ${error}`);
+      return [];
     }
-
-    for (const candidate of contentCandidates) {
-      const adjustedConfidence = Math.min(1, candidate.confidence * LESSON_COMPLETION_CONTENT_WEIGHT);
-      const existing = mergedCandidates.get(candidate.skillId);
-      if (!existing || adjustedConfidence > existing.confidence) {
-        mergedCandidates.set(candidate.skillId, {
-          ...candidate,
-          confidence: adjustedConfidence,
-          reason: `content match: ${candidate.reason}`,
-        });
-      } else {
-        mergedCandidates.set(candidate.skillId, {
-          ...existing,
-          reason: `${existing.reason}; content also matched: ${candidate.reason}`,
-        });
-      }
-    }
-
-    const candidates = Array.from(mergedCandidates.values())
-      .filter((candidate) => candidate.confidence >= LESSON_COMPLETION_MIN_CONFIDENCE)
-      .sort((a, b) => b.confidence - a.confidence)
-      .slice(0, LESSON_COMPLETION_MAX_SKILL_EVENTS);
+    candidates = candidates.slice(0, LESSON_COMPLETION_MAX_SKILL_EVENTS);
 
     const events = [];
     for (const candidate of candidates) {
@@ -801,7 +694,7 @@ export class SkillRadarService {
           sourceId: input.lessonId,
           scoreDelta,
           confidence: candidate.confidence,
-          reason: `Lesson completion signal: ${candidate.reason}`,
+          reason: `Lesson completion signal (ai-classifier): ${candidate.reason}`,
         }),
       );
     }
@@ -1021,8 +914,17 @@ export class SkillRadarService {
     });
     const skillById = new Map(skills.map((skill) => [skill.id, skill]));
 
-    return this.analyzeQuestionSkills(question.questionText, skills)
-      .filter((candidate) => candidate.confidence >= 0.2)
+    let candidates: SkillAnalysisCandidate[];
+    try {
+      candidates = (await this.analyzeQuestionSkillsWithAi(question.questionText, skills)).filter(
+        (candidate) => candidate.confidence >= AI_CLASSIFIER_MIN_CONFIDENCE,
+      );
+    } catch (error) {
+      this.logger.warn(`AI ล่ม: skill classifier unavailable while suggesting question skills: ${error}`);
+      throw new BadRequestException("AI ล่ม กรุณาลองใหม่อีกครั้ง");
+    }
+
+    return candidates
       .slice(0, 5)
       .map((candidate) => {
         const skill = skillById.get(candidate.skillId);

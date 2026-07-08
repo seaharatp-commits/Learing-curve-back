@@ -119,31 +119,6 @@ describe("SkillRadarService Phase 9 admin analytics", () => {
 });
 
 describe("SkillRadarService Phase 4/5 scoring", () => {
-  it("does not treat short keywords as substring matches inside unrelated words", () => {
-    const { service } = makeService();
-
-    const result = service.analyzeQuestionSkills("What is capital budgeting?", [
-      makeSkill({ id: "skill-api", name: "API", keywords: ["api"] }),
-    ]);
-
-    expect(result).toEqual([]);
-  });
-
-  it("maps Data Flow Diagram questions to System Analysis", () => {
-    const { service } = makeService();
-
-    const result = service.analyzeQuestionSkills("แผนภาพกระแสข้อมูล (Data Flow Diagram) คืออะไร", [
-      makeSkill({ id: "skill-system-analysis", name: "System Analysis", keywords: [] }),
-      makeSkill({ id: "skill-backend", name: "BackEnd", keywords: ["api", "database"] }),
-    ]);
-
-    expect(result[0]).toMatchObject({
-      skillId: "skill-system-analysis",
-      skillName: "System Analysis",
-    });
-    expect(result[0].confidence).toBeGreaterThanOrEqual(0.2);
-  });
-
   it("records AI chat skill signals only for skills in the learner selected position", async () => {
     const { service, prisma, aiService } = makeService();
     prisma.positionSkill.findMany.mockResolvedValue([
@@ -186,7 +161,7 @@ describe("SkillRadarService Phase 4/5 scoring", () => {
     });
   });
 
-  it("falls back to keyword matching when the AI classifier fails", async () => {
+  it("records no skill signal (no keyword fallback) when the AI classifier is down", async () => {
     const { service, prisma, aiService } = makeService();
     aiService.chat.mockRejectedValue(new Error("AI down"));
 
@@ -196,14 +171,8 @@ describe("SkillRadarService Phase 4/5 scoring", () => {
       sourceId: "message-1",
     });
 
-    expect(events).toHaveLength(1);
-    expect(prisma.skillScoreEvent.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        skillId: "skill-backend",
-        sourceType: "AI_CHAT_QUESTION",
-        reason: expect.stringContaining("keyword-fallback"),
-      }),
-    });
+    expect(events).toEqual([]);
+    expect(prisma.skillScoreEvent.create).not.toHaveBeenCalled();
   });
 
   it("does not record more AI chat score events after the daily user cap is reached", async () => {
@@ -311,11 +280,14 @@ describe("SkillRadarService Phase 4/5 scoring", () => {
 
 describe("SkillRadarService Phase 7 lesson behavior scoring", () => {
   it("records small skill score events from lesson completion title and content signals", async () => {
-    const { service, prisma } = makeService();
+    const { service, prisma, aiService } = makeService();
     prisma.positionSkill.findMany.mockResolvedValue([
       makeSkill({ id: "skill-backend", name: "BackEnd", keywords: ["api", "database", "auth"] }),
       makeSkill({ id: "skill-devops", name: "DevOps", keywords: ["docker", "deploy"] }),
     ]);
+    aiService.chat.mockResolvedValue(
+      JSON.stringify([{ skillId: "skill-backend", confidence: 0.7, reason: "Lesson covers API auth and database" }]),
+    );
 
     const events = await service.recordLessonCompletionSkillSignals({
       userId: "user-1",

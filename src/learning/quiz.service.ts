@@ -277,11 +277,7 @@ export class QuizService {
 
       if (!question) continue;
       const analysisText = [question.questionText, question.explanation].filter(Boolean).join("\n");
-      const { candidates, usedAiClassifier } = await this.skillRadarService.analyzeUserTextSkills(
-        userId,
-        analysisText,
-        0.2,
-      );
+      const { candidates } = await this.skillRadarService.analyzeUserTextSkills(userId, analysisText, 0.2);
 
       for (const candidate of candidates.slice(0, 2)) {
         const baseDelta = answer.isCorrect ? CORRECT_SKILL_SCORE_DELTA : WRONG_SKILL_SCORE_DELTA;
@@ -294,7 +290,7 @@ export class QuizService {
         current.delta += delta;
         current.confidence = Math.max(current.confidence, candidate.confidence);
         current.reasons.push(
-          `${candidate.skillName}: ${answer.isCorrect ? "correct" : "wrong"} answer (${usedAiClassifier ? "ai-classifier" : "keyword-fallback"}: ${candidate.reason})`,
+          `${candidate.skillName}: ${answer.isCorrect ? "correct" : "wrong"} answer (ai-classifier: ${candidate.reason})`,
         );
         scoreBySkillId.set(candidate.skillId, current);
       }

@@ -38,293 +38,179 @@ describe("RecommendationService", () => {
 
   beforeEach(() => {
     prisma = { knowledgeBaseArticle: { findMany: jest.fn() } };
-    // These tests exercise the deterministic keyword-matching fallback, which is
-    // what recommend() uses whenever the AI Center is unavailable or unparseable.
-    aiService = { chat: jest.fn().mockRejectedValue(new Error("AI Center unavailable in tests")) };
+    aiService = { chat: jest.fn() };
     service = new RecommendationService(
       prisma as unknown as PrismaService,
       aiService as unknown as AiService,
     );
   });
 
-  it("returns nothing when the query has no usable tokens", async () => {
-    const result = await service.recommend({ title: "a", description: "" });
-    expect(result).toEqual([]);
-    expect(prisma.knowledgeBaseArticle.findMany).not.toHaveBeenCalled();
-  });
-
-  it("returns nothing when there is no token overlap with any article", async () => {
-    prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
-      makeArticle({ id: "kb-1", title: "เครื่องพิมพ์มีรอยขาว", keywords: ["printer"] }),
-    ]);
-
-    const result = await service.recommend({ title: "ลืมรหัสผ่าน เข้าระบบไม่ได้" });
-    expect(result).toEqual([]);
-  });
-
-  it("ranks higher-overlap articles above lower-overlap ones", async () => {
-    prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
-      makeArticle({
-        id: "kb-low",
-        title: "Windows error",
-        keywords: ["windows"],
-        category: { name: "ปัญหาการติดตั้ง" },
-      }),
-      makeArticle({
-        id: "kb-high",
-        title: "Windows 11 error 0x80070005",
-        keywords: ["windows", "0x80070005", "error"],
-        category: { name: "ปัญหาการติดตั้ง" },
-      }),
-    ]);
-
-    const result = await service.recommend({
-      title: "เปิดโปรแกรมไม่ได้ บน Windows ขึ้น error 0x80070005",
+  describe("recommend", () => {
+    it("returns nothing when the query has no usable tokens, without calling the AI Center", async () => {
+      const result = await service.recommend({ title: "a", description: "" });
+      expect(result).toEqual([]);
+      expect(prisma.knowledgeBaseArticle.findMany).not.toHaveBeenCalled();
+      expect(aiService.chat).not.toHaveBeenCalled();
     });
 
-    expect(result.map((r) => r.articleId)).toEqual(["kb-high", "kb-low"]);
-    expect(result[0].confidenceScore).toBeGreaterThan(result[1].confidenceScore);
-  });
-
-  it("boosts confidence and flags sameCategory when categories match", async () => {
-    // Partial overlap (not a perfect 1.0 match) so the category boost is
-    // actually observable instead of being clipped by the score's 1.0 cap.
-    prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
-      makeArticle({
-        id: "kb-1",
-        title: "เปิดแอปไม่ได้ Windows",
-        keywords: ["เปิดแอปไม่ได้", "windows", "error"],
-        category: { name: "ปัญหาการติดตั้ง" },
-      }),
-    ]);
-
-    const [withMatch] = await service.recommend({
-      title: "เปิดแอปไม่ได้",
-      category: "ปัญหาการติดตั้ง",
-    });
-    const [withoutMatch] = await service.recommend({
-      title: "เปิดแอปไม่ได้",
-      category: "อื่นๆ",
+    it("returns nothing when there are no articles to consider", async () => {
+      prisma.knowledgeBaseArticle.findMany.mockResolvedValue([]);
+      const result = await service.recommend({ title: "merge workflow" });
+      expect(result).toEqual([]);
+      expect(aiService.chat).not.toHaveBeenCalled();
     });
 
-    expect(withMatch.sameCategory).toBe(true);
-    expect(withoutMatch.sameCategory).toBe(false);
-    expect(withMatch.confidenceScore).toBeGreaterThan(withoutMatch.confidenceScore);
-  });
+    it("throws an AI ล่ม error instead of falling back to keyword matching when the AI Center fails", async () => {
+      prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
+        makeArticle({ id: "kb-1", title: "Windows error", keywords: ["windows"] }),
+      ]);
+      aiService.chat.mockRejectedValue(new Error("AI Center unavailable"));
 
-  it("never returns a confidence score above 1", async () => {
-    prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
-      makeArticle({
-        id: "kb-1",
-        title: "Module Alpha",
-        keywords: ["module", "alpha"],
-        category: { name: "หมวด A" },
-      }),
-    ]);
-
-    const [result] = await service.recommend({ title: "module alpha", category: "หมวด A" });
-    expect(result.confidenceScore).toBeLessThanOrEqual(1);
-  });
-
-  it("caps results at 5 and sorts descending by confidence", async () => {
-    const articles = Array.from({ length: 8 }, (_, i) =>
-      makeArticle({
-        id: `kb-${i}`,
-        title: `เครื่องพิมพ์ ${"a".repeat(i + 1)}`,
-        keywords: ["เครื่องพิมพ์", "a".repeat(i + 1)],
-      }),
-    );
-    prisma.knowledgeBaseArticle.findMany.mockResolvedValue(articles);
-
-    const result = await service.recommend({ title: "เครื่องพิมพ์ aaaaaaaa" });
-
-    expect(result.length).toBeLessThanOrEqual(5);
-    const scores = result.map((r) => r.confidenceScore);
-    expect(scores).toEqual([...scores].sort((a, b) => b - a));
-  });
-
-  it("prefers title keywords and tags over a weak content-only match", async () => {
-    prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
-      makeArticle({
-        id: "kb-content-only",
-        title: "วิธีตั้งค่าทั่วไป",
-        content: "เอกสารนี้กล่าวถึง workflow แบบกว้าง ๆ แต่ไม่ได้เกี่ยวกับ merge workflow โดยตรง",
-      }),
-      makeArticle({
-        id: "kb-primary",
-        title: "Merge workflow method A",
-        keywords: ["merge", "workflow"],
-        tags: ["method-a"],
-        summary: "ขั้นตอนสำหรับ merge workflow method A",
-      }),
-    ]);
-
-    const result = await service.recommend({ title: "ขั้นตอน merge workflow method A" });
-
-    expect(result).toHaveLength(1);
-    expect(result[0].articleId).toBe("kb-primary");
-    expect(result[0].confidenceScore).toBeGreaterThanOrEqual(0.1);
-  });
-
-  it("does not show weak matches that only come from long content", async () => {
-    prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
-      makeArticle({
-        id: "kb-weak",
-        title: "ตั้งค่าระบบทั่วไป",
-        content:
-          "บทความยาวที่กล่าวถึงคำทั่วไปจำนวนมาก เช่น workflow และขั้นตอน แต่ไม่มีชื่อเรื่องหรือ keyword ที่ตรงกับคำถามเฉพาะ",
-      }),
-    ]);
-
-    const result = await service.recommend({ title: "merge workflow platform x" });
-
-    expect(result).toEqual([]);
-  });
-
-  it("ignores generic Thai filler words when there are no specific terms", async () => {
-    prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
-      makeArticle({
-        id: "kb-generic",
-        title: "ข้อมูลการใช้งานระบบทั่วไป",
-        keywords: ["ข้อมูล", "ระบบ", "ใช้งาน"],
-      }),
-    ]);
-
-    const result = await service.recommend({ title: "ช่วย บอก เกี่ยวกับ ระบบ หน่อย" });
-
-    expect(result).toEqual([]);
-    expect(prisma.knowledgeBaseArticle.findMany).not.toHaveBeenCalled();
-  });
-
-  it("searches and normalizes Knowledge Base candidates from multiple signals", async () => {
-    prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
-      makeArticle({
-        id: "kb-next-ui",
-        title: "เลือก UI library สำหรับ Next.js",
-        summary: "เปรียบเทียบ Ant Design และ MUI สำหรับเว็บขายของ",
-        content: "แนวทางเลือก component library สำหรับ ecommerce",
-        keywords: ["Next.js", "Ant Design", "MUI"],
-        tags: ["frontend", "ui"],
-      }),
-    ]);
-
-    const result = await service.searchCandidates({
-      originalQuestion: "next.js ใช้ ant design หรือ mui ดี",
-      interpretedQuestion: "Compare Ant Design and MUI for Next.js ecommerce",
-      keywords: ["Next.js", "Ant Design", "MUI"],
-      possibleSkills: [{ skillName: "FrontEnd", confidence: 0.8 }],
-      limit: 5,
+      await expect(service.recommend({ title: "merge workflow" })).rejects.toThrow(/AI ล่ม/);
     });
 
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      id: "kb-next-ui",
-      title: "เลือก UI library สำหรับ Next.js",
-      tags: expect.arrayContaining(["Next.js", "Ant Design", "MUI", "frontend", "ui"]),
+    it("returns AI-selected recommendations when the AI Center succeeds", async () => {
+      prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
+        makeArticle({
+          id: "kb-primary",
+          title: "Merge workflow method A",
+          keywords: ["merge", "workflow"],
+          tags: ["method-a"],
+          summary: "ขั้นตอนสำหรับ merge workflow method A",
+        }),
+      ]);
+      aiService.chat
+        .mockResolvedValueOnce(
+          JSON.stringify({ interpretedQuery: "How to merge workflow method A", keywords: ["merge", "workflow"] }),
+        )
+        .mockResolvedValueOnce(
+          JSON.stringify([{ articleId: "kb-primary", confidenceScore: 0.8, explanation: "ตรงกับคำถาม" }]),
+        );
+
+      const result = await service.recommend({ title: "ขั้นตอน merge workflow method A" });
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({ articleId: "kb-primary", confidenceScore: 0.8 });
     });
-    expect(result[0].databaseRelevanceScore).toBeGreaterThan(0);
-    expect(result[0].contentPreview?.length).toBeLessThanOrEqual(500);
   });
 
-  it("reranks candidates with AI and filters unknown ids", async () => {
-    aiService.chat.mockResolvedValue(
-      JSON.stringify({
-        recommendations: [
-          {
-            knowledgeBaseId: "kb-1",
-            confidenceScore: 0.87,
-            matchedSkills: ["FrontEnd"],
-            reason: "ตรงกับ Next.js และ UI library",
-            whyThisKBIsRelevant: "ช่วยตอบคำถามเรื่องการเลือก Ant Design หรือ MUI",
-            shouldRecommend: true,
-          },
-          {
-            knowledgeBaseId: "unknown-id",
-            confidenceScore: 0.99,
-            matchedSkills: ["FrontEnd"],
-            reason: "AI invented this id",
-            whyThisKBIsRelevant: "invalid",
-            shouldRecommend: true,
-          },
-        ],
-      }),
-    );
+  describe("searchCandidates", () => {
+    it("searches and normalizes Knowledge Base candidates from multiple signals", async () => {
+      prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
+        makeArticle({
+          id: "kb-next-ui",
+          title: "เลือก UI library สำหรับ Next.js",
+          summary: "เปรียบเทียบ Ant Design และ MUI สำหรับเว็บขายของ",
+          content: "แนวทางเลือก component library สำหรับ ecommerce",
+          keywords: ["Next.js", "Ant Design", "MUI"],
+          tags: ["frontend", "ui"],
+        }),
+      ]);
 
-    const result = await service.rerankCandidates({
-      analysis: {
+      const result = await service.searchCandidates({
         originalQuestion: "next.js ใช้ ant design หรือ mui ดี",
         interpretedQuestion: "Compare Ant Design and MUI for Next.js ecommerce",
-        intent: "compare_ui_library",
-        possibleSkills: [{ skillName: "FrontEnd", confidence: 0.8 }],
         keywords: ["Next.js", "Ant Design", "MUI"],
-        difficultyGuess: "intermediate",
-        questionQualityScore: 0.8,
-      },
-      candidates: [
-        {
-          id: "kb-1",
-          title: "เลือก UI library สำหรับ Next.js",
-          summary: "เปรียบเทียบ Ant Design และ MUI",
-          tags: ["Next.js", "MUI"],
-          relatedSkills: ["FrontEnd"],
-          contentPreview: "preview",
-          databaseRelevanceScore: 0.4,
-        },
-      ],
-    });
+        possibleSkills: [{ skillName: "FrontEnd", confidence: 0.8 }],
+        limit: 5,
+      });
 
-    expect(result).toEqual([
-      {
-        knowledgeBaseId: "kb-1",
-        confidenceScore: 0.87,
-        matchedSkills: ["FrontEnd"],
-        reason: "ตรงกับ Next.js และ UI library",
-        whyThisKBIsRelevant: "ช่วยตอบคำถามเรื่องการเลือก Ant Design หรือ MUI",
-        shouldRecommend: true,
-      },
-    ]);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({
+        id: "kb-next-ui",
+        title: "เลือก UI library สำหรับ Next.js",
+        tags: expect.arrayContaining(["Next.js", "Ant Design", "MUI", "frontend", "ui"]),
+      });
+      expect(result[0].databaseRelevanceScore).toBeGreaterThan(0);
+      expect(result[0].contentPreview?.length).toBeLessThanOrEqual(500);
+    });
   });
 
-  it("falls back to database score when AI reranking fails", async () => {
-    aiService.chat.mockRejectedValue(new Error("AI down"));
+  describe("rerankCandidates", () => {
+    it("reranks candidates with AI and filters unknown ids", async () => {
+      aiService.chat.mockResolvedValue(
+        JSON.stringify({
+          recommendations: [
+            {
+              knowledgeBaseId: "kb-1",
+              confidenceScore: 0.87,
+              matchedSkills: ["FrontEnd"],
+              reason: "ตรงกับ Next.js และ UI library",
+              whyThisKBIsRelevant: "ช่วยตอบคำถามเรื่องการเลือก Ant Design หรือ MUI",
+              shouldRecommend: true,
+            },
+            {
+              knowledgeBaseId: "unknown-id",
+              confidenceScore: 0.99,
+              matchedSkills: ["FrontEnd"],
+              reason: "AI invented this id",
+              whyThisKBIsRelevant: "invalid",
+              shouldRecommend: true,
+            },
+          ],
+        }),
+      );
 
-    const result = await service.rerankCandidates({
-      analysis: {
-        originalQuestion: "merge workflow",
-        interpretedQuestion: "merge workflow",
-        intent: "learn_workflow",
-        possibleSkills: [],
-        keywords: ["merge", "workflow"],
-        difficultyGuess: "unknown",
-        questionQualityScore: 0.5,
-      },
-      candidates: [
-        {
-          id: "kb-low",
-          title: "Low score",
-          tags: [],
-          relatedSkills: [],
-          databaseRelevanceScore: 0.05,
+      const result = await service.rerankCandidates({
+        analysis: {
+          originalQuestion: "next.js ใช้ ant design หรือ mui ดี",
+          interpretedQuestion: "Compare Ant Design and MUI for Next.js ecommerce",
+          intent: "compare_ui_library",
+          possibleSkills: [{ skillName: "FrontEnd", confidence: 0.8 }],
+          keywords: ["Next.js", "Ant Design", "MUI"],
+          difficultyGuess: "intermediate",
+          questionQualityScore: 0.8,
         },
+        candidates: [
+          {
+            id: "kb-1",
+            title: "เลือก UI library สำหรับ Next.js",
+            summary: "เปรียบเทียบ Ant Design และ MUI",
+            tags: ["Next.js", "MUI"],
+            relatedSkills: ["FrontEnd"],
+            contentPreview: "preview",
+            databaseRelevanceScore: 0.4,
+          },
+        ],
+      });
+
+      expect(result).toEqual([
         {
-          id: "kb-high",
-          title: "High score",
-          tags: ["merge"],
-          relatedSkills: ["DevOps"],
-          databaseRelevanceScore: 0.42,
+          knowledgeBaseId: "kb-1",
+          confidenceScore: 0.87,
+          matchedSkills: ["FrontEnd"],
+          reason: "ตรงกับ Next.js และ UI library",
+          whyThisKBIsRelevant: "ช่วยตอบคำถามเรื่องการเลือก Ant Design หรือ MUI",
+          shouldRecommend: true,
         },
-      ],
+      ]);
     });
 
-    expect(result).toEqual([
-      {
-        knowledgeBaseId: "kb-high",
-        confidenceScore: 0.42,
-        matchedSkills: ["DevOps"],
-        reason: "Fallback database relevance score",
-        whyThisKBIsRelevant: "AI reranking was unavailable, so this item was selected by local relevance score.",
-        shouldRecommend: false,
-      },
-    ]);
+    it("throws an AI ล่ม error instead of falling back to a database score when AI reranking fails", async () => {
+      aiService.chat.mockRejectedValue(new Error("AI down"));
+
+      await expect(
+        service.rerankCandidates({
+          analysis: {
+            originalQuestion: "merge workflow",
+            interpretedQuestion: "merge workflow",
+            intent: "learn_workflow",
+            possibleSkills: [],
+            keywords: ["merge", "workflow"],
+            difficultyGuess: "unknown",
+            questionQualityScore: 0.5,
+          },
+          candidates: [
+            {
+              id: "kb-high",
+              title: "High score",
+              tags: ["merge"],
+              relatedSkills: ["DevOps"],
+              databaseRelevanceScore: 0.42,
+            },
+          ],
+        }),
+      ).rejects.toThrow(/AI ล่ม/);
+    });
   });
 });
