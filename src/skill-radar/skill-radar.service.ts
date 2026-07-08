@@ -46,10 +46,11 @@ const LESSON_COMPLETION_MIN_CONFIDENCE = 0.2;
 const LESSON_COMPLETION_MAX_SKILL_EVENTS = 2;
 const LESSON_COMPLETION_MAX_SCORE_DELTA = 1.2;
 const LESSON_COMPLETION_MAX_CONTENT_LENGTH = 4000;
-const BASE_INTEREST_POINT = 0.5;
 const MIN_INTEREST_QUESTION_QUALITY = 0.45;
 const MIN_INTEREST_SKILL_CONFIDENCE = 0.45;
-const MAX_INTEREST_GAIN_PER_QUESTION = 1;
+const INTEREST_HIGH_STRENGTH_THRESHOLD = 0.75;
+const INTEREST_HIGH_SCORE = 1;
+const INTEREST_LOW_SCORE = 0.5;
 
 interface AdminSkillScoreEventQuery {
   limit?: number;
@@ -316,6 +317,15 @@ export class SkillRadarService {
     return this.getUserRadar(userId, position.id);
   }
 
+  async listSkillNamesForUser(userId: string): Promise<string[]> {
+    const position = await this.resolveUserPosition(userId);
+    const skills = await this.prisma.positionSkill.findMany({
+      where: { positionId: position.id, isActive: true, position: { isActive: true } },
+      select: { name: true },
+    });
+    return skills.map((skill) => skill.name);
+  }
+
   private normalizeForMatch(value: string): string {
     return value.toLowerCase().replace(/[\s_\-/.]+/g, "");
   }
@@ -518,7 +528,6 @@ export class SkillRadarService {
       },
     });
     const skillByName = new Map(skills.map((skill) => [this.normalizeForMatch(skill.name), skill]));
-    const recommendationMultiplier = this.getRecommendationConfidenceMultiplier(input.recommendations);
     const events = [];
 
     for (const analyzedSkill of input.analysis.possibleSkills.slice(0, 3)) {
@@ -527,18 +536,12 @@ export class SkillRadarService {
       const skill = skillByName.get(this.normalizeForMatch(analyzedSkill.skillName));
       if (!skill) continue;
 
-      const skillWeight = Math.min(skill.weight ?? 1, 1.5);
-      let scoreDelta =
-        Math.round(
-          Math.min(
-            MAX_INTEREST_GAIN_PER_QUESTION,
-            BASE_INTEREST_POINT *
-              input.analysis.questionQualityScore *
-              analyzedSkill.confidence *
-              recommendationMultiplier *
-              skillWeight,
-          ) * 100,
-        ) / 100;
+      // Two-tier award instead of a multiplicative fraction: a strong signal (both the
+      // question and the skill match are confident) earns a full point, anything weaker
+      // that still cleared the gates above earns half. Diminishing-return-near-100 and
+      // wrong-answer penalties are handled by future scoring work, not here.
+      const strength = Math.min(1, input.analysis.questionQualityScore * analyzedSkill.confidence);
+      let scoreDelta = strength >= INTEREST_HIGH_STRENGTH_THRESHOLD ? INTEREST_HIGH_SCORE : INTEREST_LOW_SCORE;
       if (scoreDelta <= 0) continue;
 
       const antiFarming = await this.applyChatAntiFarmingAdjustment(
@@ -583,12 +586,6 @@ export class SkillRadarService {
     if (source === "LESSON_CHAT_QUESTION") return SKILL_SCORE_SOURCE_LESSON_CHAT_QUESTION_INTEREST;
     if (source === "LESSON_GENERATION_TOPIC") return SKILL_SCORE_SOURCE_LESSON_GENERATION_TOPIC_INTEREST;
     return SKILL_SCORE_SOURCE_CHAT_QUESTION_INTEREST;
-  }
-
-  private getRecommendationConfidenceMultiplier(recommendations: Array<{ confidenceScore: number }>) {
-    if (recommendations.length === 0) return 0.75;
-    const bestConfidence = Math.max(0, ...recommendations.map((recommendation) => recommendation.confidenceScore));
-    return Math.max(0.5, Math.min(1.2, 0.75 + bestConfidence * 0.45));
   }
 
   async analyzeUserTextSkills(userId: string, text: string, minConfidence = AI_CHAT_MIN_CONFIDENCE) {

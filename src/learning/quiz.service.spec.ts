@@ -68,6 +68,7 @@ function makeService() {
     recordQuestionSkillSignals: jest.fn().mockResolvedValue([]),
     recordQuestionInterestSignal: jest.fn().mockResolvedValue([]),
     analyzeUserTextSkills: jest.fn().mockResolvedValue({ candidates: [], usedAiClassifier: false }),
+    listSkillNamesForUser: jest.fn().mockResolvedValue([]),
   };
   const service = new QuizService(
     prisma as unknown as PrismaService,

@@ -14,7 +14,8 @@ export interface QuestionAnalysisInput {
   lessonId?: string;
   lessonTitle?: string;
   lessonSummary?: string | null;
-  lessonSkills?: string[];
+  /** Real skill names from the learner's current position — the AI must only choose from this list. */
+  availableSkillNames?: string[];
 }
 
 export interface QuestionAnalysisResult {

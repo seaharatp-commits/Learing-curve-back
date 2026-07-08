@@ -245,10 +245,12 @@ export class ChatService {
     content: string,
   ): Promise<ChatRecommendationFlowResult> {
     try {
+      const availableSkillNames = await this.skillRadarService.listSkillNamesForUser(userId);
       const analysis = await this.aiQuestionUnderstandingService.analyzeQuestion({
         userId,
         question: content,
         contextType: "GENERAL_CHAT",
+        availableSkillNames,
       });
       const candidates = await this.recommendationService.searchCandidates({
         originalQuestion: analysis.originalQuestion,

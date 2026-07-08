@@ -252,6 +252,56 @@ describe("SkillRadarService Phase 4/5 scoring", () => {
     expect(eventData.scoreDelta).toBeLessThanOrEqual(1);
   });
 
+  it("awards a full point when quality x confidence is strong, and half a point otherwise", async () => {
+    const { service, prisma } = makeService();
+    prisma.positionSkill.findMany.mockResolvedValue([
+      makeSkill({ id: "skill-frontend", name: "FrontEnd", keywords: [] }),
+    ]);
+    prisma.positionSkill.findUnique.mockResolvedValue({
+      ...makeSkill({ id: "skill-frontend", name: "FrontEnd" }),
+      position: { id: "position-1", isActive: true },
+    });
+
+    const strongEvents = await service.recordQuestionInterestSignal({
+      userId: "user-1",
+      source: "CHAT_QUESTION",
+      sourceId: "message-strong",
+      question: "React radar chart dashboard",
+      analysis: {
+        originalQuestion: "q",
+        interpretedQuestion: "q",
+        intent: "unknown",
+        possibleSkills: [{ skillName: "FrontEnd", confidence: 0.9 }],
+        keywords: [],
+        difficultyGuess: "unknown",
+        questionQualityScore: 0.9,
+      },
+      recommendations: [],
+    });
+    expect(strongEvents).toHaveLength(1);
+    expect(prisma.skillScoreEvent.create.mock.calls[0][0].data.scoreDelta).toBe(1);
+
+    prisma.skillScoreEvent.create.mockClear();
+    const weakEvents = await service.recordQuestionInterestSignal({
+      userId: "user-1",
+      source: "CHAT_QUESTION",
+      sourceId: "message-weak",
+      question: "React radar chart dashboard weak",
+      analysis: {
+        originalQuestion: "q",
+        interpretedQuestion: "q",
+        intent: "unknown",
+        possibleSkills: [{ skillName: "FrontEnd", confidence: 0.5 }],
+        keywords: [],
+        difficultyGuess: "unknown",
+        questionQualityScore: 0.5,
+      },
+      recommendations: [],
+    });
+    expect(weakEvents).toHaveLength(1);
+    expect(prisma.skillScoreEvent.create.mock.calls[0][0].data.scoreDelta).toBe(0.5);
+  });
+
   it("does not record interest score when question quality is too low", async () => {
     const { service, prisma } = makeService();
 

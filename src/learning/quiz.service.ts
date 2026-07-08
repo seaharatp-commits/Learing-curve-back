@@ -364,6 +364,7 @@ export class QuizService {
     question: string,
   ): Promise<LessonRecommendationFlowResult> {
     try {
+      const availableSkillNames = await this.skillRadarService.listSkillNamesForUser(userId);
       const analysis = await this.aiQuestionUnderstandingService.analyzeQuestion({
         userId,
         question,
@@ -371,7 +372,7 @@ export class QuizService {
         lessonId: lesson.id,
         lessonTitle: lesson.title,
         lessonSummary: this.limitText(lesson.content, 800),
-        lessonSkills: [],
+        availableSkillNames,
       });
       const candidates = await this.recommendationService.searchCandidates({
         originalQuestion: analysis.originalQuestion,

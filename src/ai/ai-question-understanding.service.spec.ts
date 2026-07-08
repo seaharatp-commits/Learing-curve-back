@@ -47,6 +47,57 @@ describe("AiQuestionUnderstandingService", () => {
     ).rejects.toThrow(/AI ล่ม/);
   });
 
+  it("drops possibleSkills that are not in the caller-provided availableSkillNames list", async () => {
+    aiService.chat.mockResolvedValue(
+      JSON.stringify({
+        originalQuestion: "อยากทำ Radar Chart บนหน้า Dashboard ด้วย React ต้องเริ่มจากอะไร",
+        interpretedQuestion: "How to start building a Radar Chart on a Dashboard using React?",
+        intent: "learn_charting",
+        possibleSkills: [
+          { skillName: "React", confidence: 0.9 },
+          { skillName: "FrontEnd", confidence: 0.7 },
+        ],
+        keywords: ["Radar Chart", "React"],
+        difficultyGuess: "intermediate",
+        questionQualityScore: 0.85,
+      }),
+    );
+
+    const result = await service.analyzeQuestion({
+      userId: "user-1",
+      question: "อยากทำ Radar Chart บนหน้า Dashboard ด้วย React ต้องเริ่มจากอะไร",
+      contextType: "GENERAL_CHAT",
+      availableSkillNames: ["FrontEnd", "BackEnd", "DevOps"],
+    });
+
+    expect(result.possibleSkills).toEqual([{ skillName: "FrontEnd", confidence: 0.7 }]);
+  });
+
+  it("sends the available skill list to the AI so it can constrain its answer", async () => {
+    aiService.chat.mockResolvedValue(
+      JSON.stringify({
+        originalQuestion: "q",
+        interpretedQuestion: "q",
+        intent: "unknown",
+        possibleSkills: [],
+        keywords: [],
+        difficultyGuess: "unknown",
+        questionQualityScore: 0.5,
+      }),
+    );
+
+    await service.analyzeQuestion({
+      userId: "user-1",
+      question: "q",
+      contextType: "GENERAL_CHAT",
+      availableSkillNames: ["FrontEnd", "BackEnd"],
+    });
+
+    const [, userMessage] = aiService.chat.mock.calls[0][0];
+    const payload = JSON.parse(userMessage.content);
+    expect(payload.availableSkills).toEqual(["FrontEnd", "BackEnd"]);
+  });
+
   it("returns an empty analysis without calling the AI for a blank question", async () => {
     const result = await service.analyzeQuestion({
       userId: "user-1",

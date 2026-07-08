@@ -41,6 +41,9 @@ const ANALYSIS_SYSTEM_PROMPT = [
   "- confidence must be between 0 and 1.",
   "- questionQualityScore must be between 0 and 1.",
   "- If the question is unclear, set questionQualityScore low.",
+  "- If the request includes an \"availableSkills\" list, every possibleSkills.skillName MUST be copied exactly (same spelling and casing) from that list — never invent a new skill name or a more specific variant (e.g. do not say \"React\" if only \"Frontend\" is in the list).",
+  "- If the request includes \"availableSkills\" and none of them clearly apply to the question, return an empty possibleSkills array instead of inventing one.",
+  "- If no \"availableSkills\" list is given, you may name skills freely.",
 ].join("\n");
 
 function clamp01(value: unknown, fallback: number): number {
@@ -113,13 +116,13 @@ export class AiQuestionUnderstandingService {
       userId: input.userId,
       contextType: input.contextType,
       question: limitText(input.question, MAX_QUESTION_LENGTH),
+      availableSkills: input.availableSkillNames ?? [],
       lesson:
         input.contextType === "LESSON_CHAT" || input.contextType === "LESSON_GENERATION"
           ? {
               id: input.lessonId,
               title: limitText(input.lessonTitle, MAX_CONTEXT_LENGTH),
               summary: limitText(input.lessonSummary, MAX_CONTEXT_LENGTH),
-              skills: input.lessonSkills ?? [],
             }
           : undefined,
     };
@@ -147,7 +150,7 @@ export class AiQuestionUnderstandingService {
       originalQuestion,
       interpretedQuestion,
       intent,
-      possibleSkills: this.normalizeSkills(parsed.possibleSkills),
+      possibleSkills: this.normalizeSkills(parsed.possibleSkills, input.availableSkillNames),
       keywords: uniqueCleanStrings(parsed.keywords, MAX_KEYWORDS),
       difficultyGuess: this.normalizeDifficulty(parsed.difficultyGuess),
       questionQualityScore: clamp01(parsed.questionQualityScore, 0.5),
@@ -167,8 +170,12 @@ export class AiQuestionUnderstandingService {
     return JSON.parse(jsonMatch[0]) as Record<string, unknown>;
   }
 
-  private normalizeSkills(value: unknown): QuestionSkillSignal[] {
+  private normalizeSkills(value: unknown, availableSkillNames?: string[]): QuestionSkillSignal[] {
     if (!Array.isArray(value)) return [];
+    const allowedNames =
+      availableSkillNames && availableSkillNames.length > 0
+        ? new Set(availableSkillNames.map((name) => name.trim().toLowerCase()))
+        : null;
     const seen = new Set<string>();
     const skills: QuestionSkillSignal[] = [];
 
@@ -179,6 +186,9 @@ export class AiQuestionUnderstandingService {
       const cleanName = skillName.trim();
       const key = cleanName.toLowerCase();
       if (seen.has(key)) continue;
+      // Safety net: if we gave the AI a fixed skill list, drop anything it invented anyway
+      // instead of letting an unmatched name silently fail to score later.
+      if (allowedNames && !allowedNames.has(key)) continue;
       seen.add(key);
       skills.push({
         skillName: cleanName,
