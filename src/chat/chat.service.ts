@@ -49,6 +49,38 @@ const BASE_SYSTEM_PROMPT = `${SYSTEM_PROMPT}\n\n${CLEAN_ENDING_PROMPT}\n\n${LIST
 
 const SELECTED_KB_SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}\n\n${SELECTED_KB_FOLLOW_UP_PROMPT}`;
 
+export const DEFAULT_SUGGESTED_QUESTIONS = [
+  "Next.js ใช้ Ant Design หรือ MUI ดีกว่ากัน?",
+  "ช่วยอธิบาย error นี้แบบเข้าใจง่าย",
+  "วิเคราะห์ขั้นตอนแก้ปัญหานี้ให้หน่อย",
+];
+
+const SUGGESTED_QUESTIONS_MIN = 3;
+const SUGGESTED_QUESTIONS_MAX = 5;
+const SUGGESTED_QUESTIONS_DISPLAY_LIMIT = 3;
+const SUGGESTED_QUESTIONS_OPTIONS = { temperature: 0.7, maxTokens: 500 };
+const RECENT_HISTORY_LIMIT = 5;
+
+const SUGGESTED_QUESTIONS_SYSTEM_PROMPT = [
+  "You generate example follow-up questions a learner could tap to start a chat on a learning platform.",
+  "Return ONLY a JSON array of 3 to 5 short question strings in Thai. No markdown, no commentary, no object wrapper.",
+  "Each question must be realistic, specific, and something the given learner would plausibly ask next.",
+  "Base the questions on the learner's current position and, when provided, their recent topics/questions and weaker skills.",
+  "If recent activity is empty or very limited, generate general starter questions for the learner's position instead of inventing fake history.",
+  "Do not repeat the learner's recent questions verbatim — build on them or explore a related angle.",
+  "Keep each question under 100 characters.",
+].join("\n");
+
+interface SuggestedQuestionsSummary {
+  currentPosition: string;
+  topSkills: string[];
+  weakSkills: string[];
+  recentTopics: string[];
+  recentQuestions: string[];
+  learningProgress: { completedLessons: number; totalLessons: number; percentage: number };
+  recommendedKnowledgeBase: string[];
+}
+
 export interface ChatRecommendedKnowledgeBase {
   articleId: string;
   title: string;
@@ -360,5 +392,112 @@ export class ChatService {
       where: { sessionId },
       orderBy: { createdAt: "asc" },
     });
+  }
+
+  private async buildSuggestedQuestionsSummary(userId: string): Promise<SuggestedQuestionsSummary> {
+    const [radar, recentUserMessages, recentLessons, recentAttempts, recentKbAnswers, totalLessons, completedLessons] =
+      await Promise.all([
+        this.skillRadarService.getUserRadar(userId).catch(() => null),
+        this.prisma.chatMessage.findMany({
+          where: { role: "USER", session: { userId } },
+          orderBy: { createdAt: "desc" },
+          take: RECENT_HISTORY_LIMIT,
+          select: { content: true },
+        }),
+        this.prisma.lesson.findMany({
+          where: { createdByUserId: userId },
+          orderBy: { createdAt: "desc" },
+          take: RECENT_HISTORY_LIMIT,
+          select: { title: true },
+        }),
+        this.prisma.quizAttempt.findMany({
+          where: { userId },
+          orderBy: { completedAt: "desc" },
+          take: RECENT_HISTORY_LIMIT,
+          include: { quiz: { select: { title: true } } },
+        }),
+        this.prisma.chatMessage.findMany({
+          where: { role: "ASSISTANT", sourceType: "KNOWLEDGE_BASE", session: { userId } },
+          orderBy: { createdAt: "desc" },
+          take: RECENT_HISTORY_LIMIT,
+          select: { sourceArticleTitle: true },
+        }),
+        this.prisma.lesson.count({ where: { createdByUserId: userId } }),
+        this.prisma.lessonProgress.count({ where: { userId, completed: true } }),
+      ]);
+
+    const skillsWithEvidence = (radar?.skills ?? []).filter((skill) => skill.evidenceCount > 0);
+    const topSkills = [...skillsWithEvidence].sort((a, b) => b.score - a.score).slice(0, 3).map((skill) => skill.name);
+    const weakSkills = [...skillsWithEvidence].sort((a, b) => a.score - b.score).slice(0, 3).map((skill) => skill.name);
+
+    const recentTopics = Array.from(
+      new Set([
+        ...recentLessons.map((lesson) => lesson.title),
+        ...recentAttempts.map((attempt) => attempt.quiz.title),
+      ]),
+    ).slice(0, RECENT_HISTORY_LIMIT);
+
+    const recommendedKnowledgeBase = Array.from(
+      new Set(
+        recentKbAnswers
+          .map((message) => message.sourceArticleTitle)
+          .filter((title): title is string => !!title),
+      ),
+    ).slice(0, 3);
+
+    return {
+      currentPosition: radar?.position.name ?? "Software Engineer",
+      topSkills,
+      weakSkills,
+      recentTopics,
+      recentQuestions: recentUserMessages.map((message) => message.content),
+      learningProgress: {
+        completedLessons,
+        totalLessons,
+        percentage: totalLessons === 0 ? 0 : Math.round((completedLessons / totalLessons) * 100),
+      },
+      recommendedKnowledgeBase,
+    };
+  }
+
+  private parseSuggestedQuestions(raw: string): string[] {
+    const match = raw.match(/\[[\s\S]*\]/);
+    if (!match) throw new Error("AI response did not contain a JSON array");
+
+    const parsed = JSON.parse(match[0]) as unknown;
+    if (!Array.isArray(parsed)) throw new Error("AI response JSON is not an array");
+
+    const questions = Array.from(
+      new Set(
+        parsed
+          .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+          .map((item) => item.trim().slice(0, 100)),
+      ),
+    ).slice(0, SUGGESTED_QUESTIONS_MAX);
+
+    if (questions.length < SUGGESTED_QUESTIONS_MIN) {
+      throw new Error(`AI returned too few usable questions (${questions.length})`);
+    }
+
+    return questions;
+  }
+
+  async getSuggestedQuestions(userId: string): Promise<{ questions: string[] }> {
+    try {
+      const summary = await this.buildSuggestedQuestionsSummary(userId);
+      const reply = await this.aiService.chat(
+        [
+          { role: "system", content: SUGGESTED_QUESTIONS_SYSTEM_PROMPT },
+          { role: "user", content: JSON.stringify(summary) },
+        ],
+        SUGGESTED_QUESTIONS_OPTIONS,
+      );
+
+      const questions = this.parseSuggestedQuestions(reply).slice(0, SUGGESTED_QUESTIONS_DISPLAY_LIMIT);
+      return { questions };
+    } catch (error) {
+      this.logger.warn(`AI ล่ม: suggested questions unavailable, using default list: ${error}`);
+      return { questions: DEFAULT_SUGGESTED_QUESTIONS.slice(0, SUGGESTED_QUESTIONS_DISPLAY_LIMIT) };
+    }
   }
 }

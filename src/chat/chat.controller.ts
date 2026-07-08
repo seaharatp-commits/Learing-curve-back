@@ -19,4 +19,9 @@ export class ChatController {
   getMessages(@CurrentUser() user: RequestUser, @Query("sessionId") sessionId: string) {
     return this.chatService.getSessionMessages(user.id, sessionId);
   }
+
+  @Get("suggested-questions")
+  getSuggestedQuestions(@CurrentUser() user: RequestUser) {
+    return this.chatService.getSuggestedQuestions(user.id);
+  }
 }
