@@ -1,3 +1,8 @@
+import type {
+  KnowledgeBaseRecommendation,
+  QuestionAnalysisResult,
+} from "../ai/ai-question-understanding.types";
+
 export interface SkillRadarPosition {
   id: string;
   name: string;
@@ -51,6 +56,15 @@ export interface RecordQuestionSkillSignalsInput {
   maxScoreDelta?: number;
   maxSkillEvents?: number;
   reasonPrefix?: string;
+}
+
+export interface RecordQuestionInterestSignalInput {
+  userId: string;
+  source: "CHAT_QUESTION" | "LESSON_CHAT_QUESTION" | "LESSON_GENERATION_TOPIC";
+  sourceId?: string | null;
+  question: string;
+  analysis: QuestionAnalysisResult;
+  recommendations: KnowledgeBaseRecommendation[];
 }
 
 export interface PositionSkillSuggestion {

@@ -6,6 +6,7 @@ import { buildFingerprint, jaccardScore } from "../knowledge-base/text-similarit
 import type {
   PositionSkillSuggestion,
   RecordLessonCompletionSkillSignalsInput,
+  RecordQuestionInterestSignalInput,
   RecordQuestionSkillSignalsInput,
   RecordSkillScoreEventInput,
   SkillAnalysisCandidate,
@@ -20,6 +21,9 @@ import type { UpdateMyPositionDto } from "./dto/update-my-position.dto";
 
 const DEFAULT_POSITION_NAME = "Software Engineer";
 const SKILL_SCORE_SOURCE_AI_CHAT_QUESTION = "AI_CHAT_QUESTION";
+const SKILL_SCORE_SOURCE_CHAT_QUESTION_INTEREST = "CHAT_QUESTION_INTEREST";
+const SKILL_SCORE_SOURCE_LESSON_CHAT_QUESTION_INTEREST = "LESSON_CHAT_QUESTION_INTEREST";
+const SKILL_SCORE_SOURCE_LESSON_GENERATION_TOPIC_INTEREST = "LESSON_GENERATION_TOPIC_INTEREST";
 const AI_CHAT_MIN_CONFIDENCE = 0.2;
 const AI_CHAT_MAX_SKILL_EVENTS = 3;
 const AI_CHAT_MAX_SCORE_DELTA = 3;
@@ -44,6 +48,10 @@ const LESSON_COMPLETION_MAX_SCORE_DELTA = 1.2;
 const LESSON_COMPLETION_MAX_CONTENT_LENGTH = 4000;
 const LESSON_COMPLETION_TITLE_WEIGHT = 1.2;
 const LESSON_COMPLETION_CONTENT_WEIGHT = 0.7;
+const BASE_INTEREST_POINT = 0.5;
+const MIN_INTEREST_QUESTION_QUALITY = 0.45;
+const MIN_INTEREST_SKILL_CONFIDENCE = 0.45;
+const MAX_INTEREST_GAIN_PER_QUESTION = 1;
 const BUILT_IN_SKILL_KEYWORDS: Record<string, string[]> = {
   frontend: ["front end", "หน้าเว็บ", "หน้าจอ", "ปุ่ม", "ฟอร์ม", "responsive", "component"],
   backend: ["back end", "api", "ฐานข้อมูล", "ล็อกอิน", "login", "auth", "server"],
@@ -540,6 +548,112 @@ export class SkillRadarService {
     }
 
     return events;
+  }
+
+  async recordQuestionInterestSignal(input: RecordQuestionInterestSignalInput) {
+    const question = input.question.trim();
+    if (question.length < 3) return [];
+    if (input.analysis.questionQualityScore < MIN_INTEREST_QUESTION_QUALITY) return [];
+
+    const sourceType = this.getQuestionInterestSourceType(input.source);
+    if (input.sourceId) {
+      const existingSourceEvents = await this.prisma.skillScoreEvent.findMany({
+        where: {
+          userId: input.userId,
+          sourceType,
+          sourceId: input.sourceId,
+        },
+        take: 1,
+        select: { id: true },
+      });
+      if (existingSourceEvents.length > 0) return [];
+    }
+
+    const position = await this.resolveUserPosition(input.userId);
+    const skills = await this.prisma.positionSkill.findMany({
+      where: { positionId: position.id, isActive: true, position: { isActive: true } },
+      select: {
+        id: true,
+        positionId: true,
+        name: true,
+        description: true,
+        keywords: true,
+        weight: true,
+        isActive: true,
+      },
+    });
+    const skillByName = new Map(skills.map((skill) => [this.normalizeForMatch(skill.name), skill]));
+    const recommendationMultiplier = this.getRecommendationConfidenceMultiplier(input.recommendations);
+    const events = [];
+
+    for (const analyzedSkill of input.analysis.possibleSkills.slice(0, 3)) {
+      if (analyzedSkill.confidence < MIN_INTEREST_SKILL_CONFIDENCE) continue;
+
+      const skill = skillByName.get(this.normalizeForMatch(analyzedSkill.skillName));
+      if (!skill) continue;
+
+      const skillWeight = Math.min(skill.weight ?? 1, 1.5);
+      let scoreDelta =
+        Math.round(
+          Math.min(
+            MAX_INTEREST_GAIN_PER_QUESTION,
+            BASE_INTEREST_POINT *
+              input.analysis.questionQualityScore *
+              analyzedSkill.confidence *
+              recommendationMultiplier *
+              skillWeight,
+          ) * 100,
+        ) / 100;
+      if (scoreDelta <= 0) continue;
+
+      const antiFarming = await this.applyChatAntiFarmingAdjustment(
+        input.userId,
+        skill.id,
+        question,
+        scoreDelta,
+        input.sourceId ?? null,
+        sourceType,
+      );
+      scoreDelta = antiFarming.scoreDelta;
+      if (scoreDelta <= 0) continue;
+
+      const recommendationIds = input.recommendations
+        .filter((recommendation) => recommendation.shouldRecommend)
+        .map((recommendation) => `${recommendation.knowledgeBaseId}:${recommendation.confidenceScore}`)
+        .slice(0, 3)
+        .join(", ");
+
+      events.push(
+        await this.recordSkillScoreEvent({
+          userId: input.userId,
+          skillId: skill.id,
+          sourceType,
+          sourceId: input.sourceId ?? null,
+          scoreDelta,
+          confidence: Math.round(analyzedSkill.confidence * 100) / 100,
+          reason:
+            `Interest signal only: ${analyzedSkill.skillName} from learner question. ` +
+            `quality=${Math.round(input.analysis.questionQualityScore * 100) / 100}, ` +
+            `interpreted="${input.analysis.interpretedQuestion.slice(0, 160)}"` +
+            (recommendationIds ? `, kb=${recommendationIds}` : "") +
+            (antiFarming.note ? ` | anti-farming: ${antiFarming.note}` : ""),
+        }),
+      );
+    }
+
+    return events;
+  }
+
+  private getQuestionInterestSourceType(source: RecordQuestionInterestSignalInput["source"]) {
+    if (source === "LESSON_CHAT_QUESTION") return SKILL_SCORE_SOURCE_LESSON_CHAT_QUESTION_INTEREST;
+    if (source === "LESSON_GENERATION_TOPIC") return SKILL_SCORE_SOURCE_LESSON_GENERATION_TOPIC_INTEREST;
+    return SKILL_SCORE_SOURCE_CHAT_QUESTION_INTEREST;
+  }
+
+  private getRecommendationConfidenceMultiplier(recommendations: Array<{ confidenceScore: number }>) {
+    if (recommendations.length === 0) return 0.75;
+    const bestConfidence = Math.max(0, ...recommendations.map((recommendation) => recommendation.confidenceScore));
+    return Math.max(0.5, Math.min(1.2, 0.75 + bestConfidence * 0.45));
   }
 
   async analyzeUserTextSkills(userId: string, text: string, minConfidence = AI_CHAT_MIN_CONFIDENCE) {

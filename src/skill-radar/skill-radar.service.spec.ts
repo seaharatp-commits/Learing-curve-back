@@ -214,6 +214,84 @@ describe("SkillRadarService Phase 4/5 scoring", () => {
     expect(prisma.skillScoreEvent.create).not.toHaveBeenCalled();
     expect(prisma.userSkillScore.upsert).not.toHaveBeenCalled();
   });
+
+  it("records small interest-only score events from analyzed chat questions", async () => {
+    const { service, prisma } = makeService();
+    prisma.positionSkill.findMany.mockResolvedValue([
+      makeSkill({ id: "skill-frontend", name: "FrontEnd", keywords: ["next.js", "ui", "mui"] }),
+    ]);
+    prisma.positionSkill.findUnique.mockResolvedValue({
+      ...makeSkill({ id: "skill-frontend", name: "FrontEnd" }),
+      position: { id: "position-1", isActive: true },
+    });
+
+    const events = await service.recordQuestionInterestSignal({
+      userId: "user-1",
+      source: "CHAT_QUESTION",
+      sourceId: "message-1",
+      question: "next.js ใช้ ant design หรือ mui ดีกว่ากันในการทำเว็บขายของ",
+      analysis: {
+        originalQuestion: "next.js ใช้ ant design หรือ mui ดีกว่ากันในการทำเว็บขายของ",
+        interpretedQuestion: "Compare Ant Design and MUI for a Next.js ecommerce website",
+        intent: "compare_ui_library",
+        possibleSkills: [{ skillName: "FrontEnd", confidence: 0.8 }],
+        keywords: ["Next.js", "Ant Design", "MUI"],
+        difficultyGuess: "intermediate",
+        questionQualityScore: 0.8,
+      },
+      recommendations: [
+        {
+          knowledgeBaseId: "kb-1",
+          confidenceScore: 0.7,
+          matchedSkills: ["FrontEnd"],
+          reason: "UI library match",
+          whyThisKBIsRelevant: "Related to frontend UI choices",
+          shouldRecommend: true,
+        },
+      ],
+    });
+
+    expect(events).toHaveLength(1);
+    expect(prisma.skillScoreEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: "user-1",
+        skillId: "skill-frontend",
+        sourceType: "CHAT_QUESTION_INTEREST",
+        sourceId: "message-1",
+        scoreDelta: expect.any(Number),
+        confidence: 0.8,
+        reason: expect.stringContaining("Interest signal only"),
+      }),
+    });
+    const eventData = prisma.skillScoreEvent.create.mock.calls[0][0].data;
+    expect(eventData.scoreDelta).toBeGreaterThan(0);
+    expect(eventData.scoreDelta).toBeLessThanOrEqual(1);
+  });
+
+  it("does not record interest score when question quality is too low", async () => {
+    const { service, prisma } = makeService();
+
+    const events = await service.recordQuestionInterestSignal({
+      userId: "user-1",
+      source: "CHAT_QUESTION",
+      sourceId: "message-1",
+      question: "ช่วยหน่อย",
+      analysis: {
+        originalQuestion: "ช่วยหน่อย",
+        interpretedQuestion: "ช่วยหน่อย",
+        intent: "unknown",
+        possibleSkills: [{ skillName: "FrontEnd", confidence: 0.9 }],
+        keywords: [],
+        difficultyGuess: "unknown",
+        questionQualityScore: 0.2,
+      },
+      recommendations: [],
+    });
+
+    expect(events).toEqual([]);
+    expect(prisma.skillScoreEvent.create).not.toHaveBeenCalled();
+    expect(prisma.userSkillScore.upsert).not.toHaveBeenCalled();
+  });
 });
 
 describe("SkillRadarService Phase 7 lesson behavior scoring", () => {

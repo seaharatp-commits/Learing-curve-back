@@ -6,6 +6,7 @@ import { AiQuestionUnderstandingService } from "../ai/ai-question-understanding.
 import type {
   KnowledgeBaseCandidate,
   KnowledgeBaseRecommendation,
+  QuestionAnalysisResult,
 } from "../ai/ai-question-understanding.types";
 import { RecommendationService } from "../knowledge-base/recommendation.service";
 import { SkillRadarService } from "../skill-radar/skill-radar.service";
@@ -58,6 +59,12 @@ export interface ChatRecommendedKnowledgeBase {
   reason: string;
   whyThisKBIsRelevant: string;
   shouldRecommend: boolean;
+}
+
+interface ChatRecommendationFlowResult {
+  analysis: QuestionAnalysisResult | null;
+  recommendations: KnowledgeBaseRecommendation[];
+  recommendedKnowledgeBases: ChatRecommendedKnowledgeBase[];
 }
 
 @Injectable()
@@ -185,15 +192,25 @@ export class ChatService {
     }
   }
 
-  private async recordSkillSignalsFromQuestion(userId: string, content: string, sourceId: string) {
+  private async recordSkillSignalsFromQuestion(
+    userId: string,
+    content: string,
+    sourceId: string,
+    analysis: QuestionAnalysisResult | null,
+    recommendations: KnowledgeBaseRecommendation[],
+  ) {
     try {
-      await this.skillRadarService.recordQuestionSkillSignals({
+      if (!analysis) return;
+      await this.skillRadarService.recordQuestionInterestSignal({
         userId,
+        source: "CHAT_QUESTION",
         question: content,
         sourceId,
+        analysis,
+        recommendations,
       });
     } catch (error) {
-      this.logger.warn(`Failed to record AI chat skill signal: ${error}`);
+      this.logger.warn(`Failed to record AI chat interest signal: ${error}`);
     }
   }
 
@@ -226,7 +243,7 @@ export class ChatService {
   private async getRecommendedKnowledgeBases(
     userId: string,
     content: string,
-  ): Promise<ChatRecommendedKnowledgeBase[]> {
+  ): Promise<ChatRecommendationFlowResult> {
     try {
       const analysis = await this.aiQuestionUnderstandingService.analyzeQuestion({
         userId,
@@ -249,10 +266,14 @@ export class ChatService {
         `Chat KB recommendation flow: fallback=${analysis.fallbackUsed === true}, candidates=${candidates.length}, selected=${recommendations.map((recommendation) => `${recommendation.knowledgeBaseId}:${recommendation.confidenceScore}`).join(",") || "none"}`,
       );
 
-      return this.buildRecommendedKnowledgeBases(recommendations, candidates);
+      return {
+        analysis,
+        recommendations,
+        recommendedKnowledgeBases: this.buildRecommendedKnowledgeBases(recommendations, candidates),
+      };
     } catch (error) {
       this.logger.warn(`Chat KB recommendation flow failed, continuing without recommendations: ${error}`);
-      return [];
+      return { analysis: null, recommendations: [], recommendedKnowledgeBases: [] };
     }
   }
 
@@ -296,12 +317,18 @@ export class ChatService {
       knowledge ?? undefined,
       sourceConfidenceScore,
     );
-    const recommendedKnowledgeBases = await this.getRecommendedKnowledgeBases(userId, dto.content);
+    const recommendationFlow = await this.getRecommendedKnowledgeBases(userId, dto.content);
 
     const userMessage = await this.prisma.chatMessage.create({
       data: { sessionId: session.id, role: "USER", content: dto.content },
     });
-    await this.recordSkillSignalsFromQuestion(userId, dto.content, userMessage.id);
+    await this.recordSkillSignalsFromQuestion(
+      userId,
+      dto.content,
+      userMessage.id,
+      recommendationFlow.analysis,
+      recommendationFlow.recommendations,
+    );
 
     const aiMessage = await this.prisma.chatMessage.create({
       data: {
@@ -315,7 +342,11 @@ export class ChatService {
       },
     });
 
-    return { session, messages: [userMessage, aiMessage], recommendedKnowledgeBases };
+    return {
+      session,
+      messages: [userMessage, aiMessage],
+      recommendedKnowledgeBases: recommendationFlow.recommendedKnowledgeBases,
+    };
   }
 
   async getSessionMessages(userId: string, sessionId: string) {
