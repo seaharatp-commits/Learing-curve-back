@@ -263,7 +263,7 @@ export class ChatService {
       });
 
       this.logger.log(
-        `Chat KB recommendation flow: fallback=${analysis.fallbackUsed === true}, candidates=${candidates.length}, selected=${recommendations.map((recommendation) => `${recommendation.knowledgeBaseId}:${recommendation.confidenceScore}`).join(",") || "none"}`,
+        `Chat KB recommendation flow: interpreted="${analysis.interpretedQuestion.slice(0, 160)}", fallback=${analysis.fallbackUsed === true}, candidates=${candidates.length}, selected=${recommendations.map((recommendation) => `${recommendation.knowledgeBaseId}:${recommendation.confidenceScore}`).join(",") || "none"}`,
       );
 
       return {

@@ -390,7 +390,7 @@ export class QuizService {
       });
 
       this.logger.log(
-        `Lesson chat KB recommendation flow: lesson=${lesson.id}, fallback=${analysis.fallbackUsed === true}, candidates=${candidates.length}, selected=${recommendations.map((recommendation) => `${recommendation.knowledgeBaseId}:${recommendation.confidenceScore}`).join(",") || "none"}`,
+        `Lesson chat KB recommendation flow: lesson=${lesson.id}, interpreted="${analysis.interpretedQuestion.slice(0, 160)}", fallback=${analysis.fallbackUsed === true}, candidates=${candidates.length}, selected=${recommendations.map((recommendation) => `${recommendation.knowledgeBaseId}:${recommendation.confidenceScore}`).join(",") || "none"}`,
       );
 
       return {
