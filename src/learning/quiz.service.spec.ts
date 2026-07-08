@@ -64,11 +64,18 @@ function makeService() {
     rerankCandidates: jest.fn().mockResolvedValue([]),
   };
   const skillRadarService = {
-    recordSkillScoreEvent: jest.fn(),
     recordQuestionSkillSignals: jest.fn().mockResolvedValue([]),
     recordQuestionInterestSignal: jest.fn().mockResolvedValue([]),
     analyzeUserTextSkills: jest.fn().mockResolvedValue({ candidates: [], usedAiClassifier: false }),
     listSkillNamesForUser: jest.fn().mockResolvedValue([]),
+    getSkillScoreState: jest.fn().mockResolvedValue({
+      score: 0,
+      confidence: 0.5,
+      evidenceCount: 0,
+      wrongStreak: 0,
+      masteryPoint: 0,
+    }),
+    persistSkillScoreResult: jest.fn(),
   };
   const service = new QuizService(
     prisma as unknown as PrismaService,
@@ -480,7 +487,7 @@ describe("QuizService.submitAttempt", () => {
         completedAt: expect.any(Date),
       }),
     });
-    expect(skillRadarService.recordSkillScoreEvent).not.toHaveBeenCalled();
+    expect(skillRadarService.persistSkillScoreResult).not.toHaveBeenCalled();
   });
 
   it("updates mapped skill scores after a successful quiz attempt", async () => {
@@ -524,15 +531,33 @@ describe("QuizService.submitAttempt", () => {
       ],
     });
 
-    expect(skillRadarService.recordSkillScoreEvent).toHaveBeenCalledWith({
-      userId: "user-1",
-      skillId: "skill-backend",
-      sourceType: "QUIZ_ATTEMPT",
-      sourceId: "attempt-1",
-      scoreDelta: 12,
-      confidence: 1,
-      reason: "BackEnd: correct answer; BackEnd: wrong answer",
-    });
+    // Processing is sequential per answer now (not aggregated into one flat
+    // delta), because diminishing return / wrong-streak both depend on state
+    // at the moment of each event: q1 (correct) earns a full diminishing-return
+    // gain, q2 (first wrong answer for this skill) only lowers confidence.
+    expect(skillRadarService.persistSkillScoreResult).toHaveBeenCalledTimes(2);
+    expect(skillRadarService.persistSkillScoreResult).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        userId: "user-1",
+        skillId: "skill-backend",
+        sourceType: "QUIZ_ATTEMPT",
+        sourceId: "attempt-1",
+        result: expect.objectContaining({ scoreDelta: 10 }),
+        reason: expect.stringContaining("BackEnd: correct answer"),
+      }),
+    );
+    expect(skillRadarService.persistSkillScoreResult).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        userId: "user-1",
+        skillId: "skill-backend",
+        sourceType: "QUIZ_ATTEMPT",
+        sourceId: "attempt-1",
+        result: expect.objectContaining({ scoreDelta: 0, newWrongStreak: 1 }),
+        reason: expect.stringContaining("BackEnd: wrong answer"),
+      }),
+    );
   });
 
   it("uses AI skill analysis for quiz attempts when questions have no skill mapping", async () => {
@@ -577,16 +602,18 @@ describe("QuizService.submitAttempt", () => {
       "What is the correct deployment workflow?\nUse a safe deployment workflow.",
       0.2,
     );
-    expect(skillRadarService.recordSkillScoreEvent).toHaveBeenCalledWith({
-      userId: "user-1",
-      skillId: "skill-devops",
-      sourceType: "QUIZ_ATTEMPT",
-      sourceId: "attempt-1",
-      scoreDelta: 8,
-      confidence: 0.8,
-      reason:
-        "DevOps: correct answer (ai-classifier: Question mentions deployment workflow)",
-    });
+    expect(skillRadarService.persistSkillScoreResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "user-1",
+        skillId: "skill-devops",
+        sourceType: "QUIZ_ATTEMPT",
+        sourceId: "attempt-1",
+        result: expect.objectContaining({ scoreDelta: 8 }),
+        reason: expect.stringContaining(
+          "DevOps: correct answer (ai-classifier: Question mentions deployment workflow)",
+        ),
+      }),
+    );
   });
 
   it("rejects answers for question ids that do not belong to this quiz", async () => {

@@ -2,6 +2,7 @@ import type {
   KnowledgeBaseRecommendation,
   QuestionAnalysisResult,
 } from "../ai/ai-question-understanding.types";
+import type { ScoreCalculationResult } from "./skill-score-calculator";
 
 export interface SkillRadarPosition {
   id: string;
@@ -38,13 +39,23 @@ export interface SkillAnalysisCandidate {
   reason: string;
 }
 
-export interface RecordSkillScoreEventInput {
+export interface PersistSkillScoreResultInput {
   userId: string;
   skillId: string;
   sourceType: string;
   sourceId?: string | null;
-  scoreDelta: number;
-  confidence?: number | null;
+  /** Result from calculateSkillScore/calculatePositiveSkillScore/calculateWrongAnswerSkillScore. */
+  result: ScoreCalculationResult;
+  /**
+   * Overrides result.scoreDelta when a caller must adjust it after the fact
+   * (e.g. anti-farming caps). evidenceCount/confidence/wrongStreak/masteryPoint
+   * are still taken from `result` — the event genuinely happened, only the
+   * score impact of it is being capped.
+   */
+  scoreDeltaOverride?: number;
+  /** Per-event signal confidence (e.g. AI classifier confidence for this one
+   * event) — distinct from the running skill-mastery confidence in `result`. */
+  eventConfidence?: number | null;
   reason?: string | null;
 }
 

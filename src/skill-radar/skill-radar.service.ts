@@ -3,12 +3,18 @@ import type { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import { buildFingerprint, jaccardScore } from "../knowledge-base/text-similarity.util";
+import {
+  calculatePositiveSkillScore,
+  calculateWrongAnswerSkillScore,
+  type ScoreCalculationResult,
+  type SkillScoreState,
+} from "./skill-score-calculator";
 import type {
+  PersistSkillScoreResultInput,
   PositionSkillSuggestion,
   RecordLessonCompletionSkillSignalsInput,
   RecordQuestionInterestSignalInput,
   RecordQuestionSkillSignalsInput,
-  RecordSkillScoreEventInput,
   SkillAnalysisCandidate,
   SkillRadarPosition,
   SkillRadarSkill,
@@ -461,33 +467,32 @@ export class SkillRadarService {
     for (const candidate of candidates) {
       const skill = skillById.get(candidate.skillId);
       const skillWeight = Math.min(skill?.weight ?? 1, 1.5);
-      let scoreDelta =
-        Math.round(
-          Math.min(maxScoreDelta, candidate.confidence * maxScoreDelta * skillWeight) * 100,
-        ) / 100;
+      // Raw magnitude before diminishing return; calculatePositiveSkillScore
+      // applies skillWeight and the diminishing-return curve itself.
+      const baseDelta = Math.round(Math.min(maxScoreDelta, candidate.confidence * maxScoreDelta) * 100) / 100;
+      if (baseDelta <= 0) continue;
 
-      if (scoreDelta <= 0) continue;
-
-      const antiFarming = await this.applyChatAntiFarmingAdjustment(
+      const gated = await this.computeGatedPositiveResult(
         input.userId,
         candidate.skillId,
+        baseDelta,
+        skillWeight,
         question,
-        scoreDelta,
         input.sourceId ?? null,
         sourceType,
       );
-      scoreDelta = antiFarming.scoreDelta;
-      if (scoreDelta <= 0) continue;
+      if (!gated) continue;
 
       events.push(
-        await this.recordSkillScoreEvent({
+        await this.persistSkillScoreResult({
           userId: input.userId,
           skillId: candidate.skillId,
           sourceType,
           sourceId: input.sourceId ?? null,
-          scoreDelta,
-          confidence: candidate.confidence,
-          reason: `${reasonPrefix} (ai-classifier): ${candidate.reason}${antiFarming.note ? ` | anti-farming: ${antiFarming.note}` : ""}`,
+          result: gated.result,
+          scoreDeltaOverride: gated.finalScoreDelta,
+          eventConfidence: candidate.confidence,
+          reason: `${reasonPrefix} (ai-classifier): ${candidate.reason} | ${gated.result.reason}${gated.antiFarmingNote ? ` | anti-farming: ${gated.antiFarmingNote}` : ""}`,
         }),
       );
     }
@@ -536,24 +541,23 @@ export class SkillRadarService {
       const skill = skillByName.get(this.normalizeForMatch(analyzedSkill.skillName));
       if (!skill) continue;
 
-      // Two-tier award instead of a multiplicative fraction: a strong signal (both the
-      // question and the skill match are confident) earns a full point, anything weaker
-      // that still cleared the gates above earns half. Diminishing-return-near-100 and
-      // wrong-answer penalties are handled by future scoring work, not here.
+      // Two-tier base magnitude: a strong signal (both the question and the skill
+      // match are confident) earns a full point of raw evidence, anything weaker
+      // that still cleared the gates above earns half. calculatePositiveSkillScore
+      // then applies diminishing return on top of this base amount.
       const strength = Math.min(1, input.analysis.questionQualityScore * analyzedSkill.confidence);
-      let scoreDelta = strength >= INTEREST_HIGH_STRENGTH_THRESHOLD ? INTEREST_HIGH_SCORE : INTEREST_LOW_SCORE;
-      if (scoreDelta <= 0) continue;
+      const baseDelta = strength >= INTEREST_HIGH_STRENGTH_THRESHOLD ? INTEREST_HIGH_SCORE : INTEREST_LOW_SCORE;
 
-      const antiFarming = await this.applyChatAntiFarmingAdjustment(
+      const gated = await this.computeGatedPositiveResult(
         input.userId,
         skill.id,
+        baseDelta,
+        Math.min(skill.weight ?? 1, 1.5),
         question,
-        scoreDelta,
         input.sourceId ?? null,
         sourceType,
       );
-      scoreDelta = antiFarming.scoreDelta;
-      if (scoreDelta <= 0) continue;
+      if (!gated) continue;
 
       const recommendationIds = input.recommendations
         .filter((recommendation) => recommendation.shouldRecommend)
@@ -562,19 +566,20 @@ export class SkillRadarService {
         .join(", ");
 
       events.push(
-        await this.recordSkillScoreEvent({
+        await this.persistSkillScoreResult({
           userId: input.userId,
           skillId: skill.id,
           sourceType,
           sourceId: input.sourceId ?? null,
-          scoreDelta,
-          confidence: Math.round(analyzedSkill.confidence * 100) / 100,
+          result: gated.result,
+          scoreDeltaOverride: gated.finalScoreDelta,
+          eventConfidence: Math.round(analyzedSkill.confidence * 100) / 100,
           reason:
             `Interest signal only: ${analyzedSkill.skillName} from learner question. ` +
             `quality=${Math.round(input.analysis.questionQualityScore * 100) / 100}, ` +
-            `interpreted="${input.analysis.interpretedQuestion.slice(0, 160)}"` +
+            `interpreted="${input.analysis.interpretedQuestion.slice(0, 160)}" | ${gated.result.reason}` +
             (recommendationIds ? `, kb=${recommendationIds}` : "") +
-            (antiFarming.note ? ` | anti-farming: ${antiFarming.note}` : ""),
+            (gated.antiFarmingNote ? ` | anti-farming: ${gated.antiFarmingNote}` : ""),
         }),
       );
     }
@@ -673,30 +678,73 @@ export class SkillRadarService {
     for (const candidate of candidates) {
       const skill = skillById.get(candidate.skillId);
       const skillWeight = Math.min(skill?.weight ?? 1, 1.5);
-      const scoreDelta =
-        Math.round(
-          Math.min(
-            LESSON_COMPLETION_MAX_SCORE_DELTA,
-            candidate.confidence * LESSON_COMPLETION_MAX_SCORE_DELTA * skillWeight,
-          ) * 100,
-        ) / 100;
+      // Raw magnitude before diminishing return; calculatePositiveSkillScore
+      // applies skillWeight and the diminishing-return curve itself.
+      const baseDelta =
+        Math.round(Math.min(LESSON_COMPLETION_MAX_SCORE_DELTA, candidate.confidence * LESSON_COMPLETION_MAX_SCORE_DELTA) * 100) /
+        100;
+      if (baseDelta <= 0) continue;
 
-      if (scoreDelta <= 0) continue;
+      const state = await this.getSkillScoreState(input.userId, candidate.skillId);
+      // Note: result.scoreDelta can legitimately be 0 here (score already at the
+      // 100 cap) — that's still persisted, since evidenceCount/masteryPoint still advance.
+      const result = calculatePositiveSkillScore(state, baseDelta, skillWeight);
 
       events.push(
-        await this.recordSkillScoreEvent({
+        await this.persistSkillScoreResult({
           userId: input.userId,
           skillId: candidate.skillId,
           sourceType: SKILL_SCORE_SOURCE_LESSON_COMPLETION,
           sourceId: input.lessonId,
-          scoreDelta,
-          confidence: candidate.confidence,
-          reason: `Lesson completion signal (ai-classifier): ${candidate.reason}`,
+          result,
+          eventConfidence: candidate.confidence,
+          reason: `Lesson completion signal (ai-classifier): ${candidate.reason} | ${result.reason}`,
         }),
       );
     }
 
     return events;
+  }
+
+  /**
+   * Shared gating logic for AI-chat-sourced positive skill signals: runs the
+   * diminishing-return calculator, then only applies anti-farming when there
+   * is an actual score gain to protect (result.scoreDelta > 0). If the skill
+   * is already at the 100 cap, result.scoreDelta is already 0 and the event
+   * should still be persisted for its masteryPoint/evidenceCount gain — anti
+   * farming has nothing to do there, so it's bypassed entirely rather than
+   * incorrectly treating "0 because capped" the same as "0 because farmed".
+   *
+   * Returns null when anti-farming determines an otherwise-earned score gain
+   * should not count at all (duplicate question, daily cap, ...).
+   */
+  private async computeGatedPositiveResult(
+    userId: string,
+    skillId: string,
+    baseDelta: number,
+    skillWeight: number,
+    question: string,
+    sourceId: string | null,
+    sourceType: string,
+  ): Promise<{ result: ScoreCalculationResult; finalScoreDelta: number; antiFarmingNote: string | null } | null> {
+    const state = await this.getSkillScoreState(userId, skillId);
+    const result = calculatePositiveSkillScore(state, baseDelta, skillWeight);
+
+    if (result.scoreDelta <= 0) {
+      return { result, finalScoreDelta: result.scoreDelta, antiFarmingNote: null };
+    }
+
+    const antiFarming = await this.applyChatAntiFarmingAdjustment(
+      userId,
+      skillId,
+      question,
+      result.scoreDelta,
+      sourceId,
+      sourceType,
+    );
+    if (antiFarming.scoreDelta <= 0) return null;
+
+    return { result, finalScoreDelta: antiFarming.scoreDelta, antiFarmingNote: antiFarming.note };
   }
 
   private async applyChatAntiFarmingAdjustment(
@@ -806,9 +854,43 @@ export class SkillRadarService {
     return { scoreDelta, note: null };
   }
 
-  async recordSkillScoreEvent(input: RecordSkillScoreEventInput) {
-    if (!Number.isFinite(input.scoreDelta) || input.scoreDelta === 0) {
-      throw new BadRequestException("scoreDelta ต้องเป็นตัวเลขที่ไม่ใช่ 0");
+  /**
+   * Reads the persisted skill-mastery state for a user+skill, defaulting to a
+   * fresh state (score 0, confidence 0.5, no evidence yet) if none exists.
+   * Callers pass this into calculatePositiveSkillScore/calculateWrongAnswerSkillScore
+   * before persisting the result via persistSkillScoreResult.
+   */
+  async getSkillScoreState(userId: string, skillId: string): Promise<SkillScoreState> {
+    const existing = await this.prisma.userSkillScore.findUnique({
+      where: { userId_skillId: { userId, skillId } },
+    });
+
+    return {
+      score: existing?.score ?? 0,
+      confidence: existing?.confidence ?? 0.5,
+      evidenceCount: existing?.evidenceCount ?? 0,
+      wrongStreak: existing?.wrongStreak ?? 0,
+      masteryPoint: existing?.masteryPoint ?? 0,
+    };
+  }
+
+  /**
+   * Persists a ScoreCalculationResult (from skill-score-calculator.ts) to
+   * UserSkillScore + SkillScoreEvent. This is the ONLY place that writes skill
+   * scores — the calculator decides the numbers, this just saves them.
+   *
+   * `scoreDeltaOverride` lets a caller (e.g. AI-chat anti-farming) cap the
+   * score impact of an event after the fact without discarding the rest of
+   * the calculator's result (evidenceCount/confidence/wrongStreak/masteryPoint
+   * still reflect that the event genuinely happened).
+   */
+  async persistSkillScoreResult(input: PersistSkillScoreResultInput) {
+    const scoreDelta = input.scoreDeltaOverride ?? input.result.scoreDelta;
+    // scoreDelta of exactly 0 is valid and expected — e.g. a first wrong answer
+    // only lowers confidence, and a positive event once score is already at
+    // the 100 cap only adds masteryPoint. Only reject genuinely invalid numbers.
+    if (!Number.isFinite(scoreDelta)) {
+      throw new BadRequestException("scoreDelta ต้องเป็นตัวเลขที่ถูกต้อง");
     }
 
     const skill = await this.prisma.positionSkill.findUnique({
@@ -823,21 +905,27 @@ export class SkillRadarService {
       where: { userId_skillId: { userId: input.userId, skillId: input.skillId } },
     });
     const scoreBefore = existing?.score ?? 0;
-    const scoreAfter = Math.max(0, Math.min(100, scoreBefore + input.scoreDelta));
+    const scoreAfter = Math.max(0, Math.min(100, scoreBefore + scoreDelta));
 
     const [score, event] = await this.prisma.$transaction([
       this.prisma.userSkillScore.upsert({
         where: { userId_skillId: { userId: input.userId, skillId: input.skillId } },
         update: {
           score: scoreAfter,
-          evidenceCount: { increment: 1 },
+          evidenceCount: input.result.newEvidenceCount,
+          confidence: input.result.newConfidence,
+          wrongStreak: input.result.newWrongStreak,
+          masteryPoint: input.result.newMasteryPoint,
         },
         create: {
           userId: input.userId,
           positionId: skill.positionId,
           skillId: input.skillId,
           score: scoreAfter,
-          evidenceCount: 1,
+          evidenceCount: input.result.newEvidenceCount,
+          confidence: input.result.newConfidence,
+          wrongStreak: input.result.newWrongStreak,
+          masteryPoint: input.result.newMasteryPoint,
         },
       }),
       this.prisma.skillScoreEvent.create({
@@ -847,11 +935,11 @@ export class SkillRadarService {
           skillId: input.skillId,
           sourceType: input.sourceType,
           sourceId: input.sourceId ?? null,
-          scoreDelta: input.scoreDelta,
+          scoreDelta,
           scoreBefore,
           scoreAfter,
-          confidence: input.confidence ?? null,
-          reason: input.reason ?? null,
+          confidence: input.eventConfidence ?? null,
+          reason: input.reason ?? input.result.reason,
         },
       }),
     ]);

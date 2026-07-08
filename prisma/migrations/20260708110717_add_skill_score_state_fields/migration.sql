@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "user_skill_scores" ADD COLUMN     "confidence" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+ADD COLUMN     "masteryPoint" DOUBLE PRECISION NOT NULL DEFAULT 0,
+ADD COLUMN     "wrongStreak" INTEGER NOT NULL DEFAULT 0;

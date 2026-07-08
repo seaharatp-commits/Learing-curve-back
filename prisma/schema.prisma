@@ -245,6 +245,14 @@ model UserSkillScore {
   skillId       String
   score         Float    @default(0)
   evidenceCount Int      @default(0)
+  /// Running 0-1 confidence that `score` reflects the learner's real level.
+  /// Lowered on a first wrong answer before score itself is touched.
+  confidence    Float    @default(0.5)
+  /// Consecutive wrong answers for this skill; resets to 0 on a correct answer.
+  wrongStreak   Int      @default(0)
+  /// Extra progress accrued once score is capped at 100, so continued
+  /// correct answers still register instead of being silently discarded.
+  masteryPoint  Float    @default(0)
   updatedAt     DateTime @updatedAt
 
   user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)

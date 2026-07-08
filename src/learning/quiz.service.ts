@@ -19,6 +19,7 @@ import type {
 import type { RequestUser } from "../auth/strategies/jwt.strategy";
 import { RecommendationService } from "../knowledge-base/recommendation.service";
 import { SkillRadarService } from "../skill-radar/skill-radar.service";
+import { calculatePositiveSkillScore, calculateWrongAnswerSkillScore } from "../skill-radar/skill-score-calculator";
 import type { SubmitAttemptDto } from "./dto/submit-attempt.dto";
 import type {
   AnswerResult,
@@ -42,7 +43,10 @@ const SKILL_SCORE_SOURCE_QUIZ_ATTEMPT = "QUIZ_ATTEMPT";
 const SKILL_SCORE_SOURCE_LESSON_TOPIC_CREATED = "LESSON_TOPIC_CREATED";
 const SKILL_SCORE_SOURCE_LESSON_CHAT_QUESTION = "LESSON_CHAT_QUESTION";
 const CORRECT_SKILL_SCORE_DELTA = 10;
-const WRONG_SKILL_SCORE_DELTA = 2;
+// Base magnitude of a score reduction once a wrong answer actually qualifies
+// for one (see calculateWrongAnswerSkillScore) — smaller than the correct-answer
+// gain so a bad quiz attempt never swings the Radar as hard as good evidence builds it.
+const WRONG_ANSWER_BASE_PENALTY = 6;
 
 const QUIZ_SYSTEM_PROMPT =
   "คุณคือผู้ช่วยสร้างแบบทดสอบปรนัยจากเนื้อหาความรู้ที่ให้มาเท่านั้น " +
@@ -232,6 +236,53 @@ export class QuizService {
     }
   }
 
+  /**
+   * Applies calculatePositiveSkillScore/calculateWrongAnswerSkillScore for one
+   * skill affected by one answer, and persists the result immediately.
+   *
+   * Processing happens sequentially per answer (rather than aggregating a flat
+   * delta across the whole attempt like before) because diminishing return and
+   * the wrong-answer streak both depend on the *current* state at the moment
+   * of each event — you can't sum deltas first and apply the curve after.
+   *
+   * `wrongSkillsSeenThisAttempt` tracks skills already missed once earlier in
+   * this same quiz submission: missing the same skill again within one attempt
+   * counts as `isRepeatedMistake`, so a learner who fails a whole quiz on one
+   * topic sees a real score drop, not just a repeated "first mistake" freebie.
+   */
+  private async applyQuizAnswerSkillScore(
+    userId: string,
+    attemptId: string,
+    skillId: string,
+    skillName: string,
+    skillWeight: number,
+    isCorrect: boolean,
+    reasonDetail: string,
+    wrongSkillsSeenThisAttempt: Set<string>,
+  ) {
+    const state = await this.skillRadarService.getSkillScoreState(userId, skillId);
+
+    const result = isCorrect
+      ? calculatePositiveSkillScore(state, CORRECT_SKILL_SCORE_DELTA, skillWeight)
+      : (() => {
+          const isRepeatedMistake = wrongSkillsSeenThisAttempt.has(skillId);
+          wrongSkillsSeenThisAttempt.add(skillId);
+          return calculateWrongAnswerSkillScore(state, WRONG_ANSWER_BASE_PENALTY, skillWeight, isRepeatedMistake);
+        })();
+
+    // Always persist: evidenceCount always advances, and a scoreDelta of 0 is
+    // still meaningful (first wrong answer only lowers confidence; a correct
+    // answer at the 100 cap only adds masteryPoint) — never a true no-op.
+    await this.skillRadarService.persistSkillScoreResult({
+      userId,
+      skillId,
+      sourceType: SKILL_SCORE_SOURCE_QUIZ_ATTEMPT,
+      sourceId: attemptId,
+      result,
+      reason: `${skillName}: ${reasonDetail} | ${result.reason}`,
+    });
+  }
+
   private async recordQuizSkillScores(
     userId: string,
     attemptId: string,
@@ -249,7 +300,7 @@ export class QuizService {
       }
     >,
   ) {
-    const scoreBySkillId = new Map<string, { delta: number; reasons: string[]; confidence: number }>();
+    const wrongSkillsSeenThisAttempt = new Set<string>();
 
     for (const answer of answers) {
       const question = questionById.get(answer.questionId);
@@ -257,20 +308,17 @@ export class QuizService {
 
       if (mappings.length > 0) {
         for (const mapping of mappings) {
-          const baseDelta = answer.isCorrect ? CORRECT_SKILL_SCORE_DELTA : WRONG_SKILL_SCORE_DELTA;
-          const skillWeight = mapping.skill?.weight ?? 1;
-          const delta = baseDelta * mapping.weight * skillWeight;
-          const current = scoreBySkillId.get(mapping.skillId) ?? {
-            delta: 0,
-            reasons: [],
-            confidence: 1,
-          };
-          current.delta += delta;
-          current.confidence = Math.max(current.confidence, 1);
-          current.reasons.push(
-            `${mapping.skill?.name ?? "Skill"}: ${answer.isCorrect ? "correct" : "wrong"} answer`,
+          const skillWeight = mapping.weight * (mapping.skill?.weight ?? 1);
+          await this.applyQuizAnswerSkillScore(
+            userId,
+            attemptId,
+            mapping.skillId,
+            mapping.skill?.name ?? "Skill",
+            skillWeight,
+            answer.isCorrect,
+            answer.isCorrect ? "correct answer" : "wrong answer",
+            wrongSkillsSeenThisAttempt,
           );
-          scoreBySkillId.set(mapping.skillId, current);
         }
         continue;
       }
@@ -280,32 +328,17 @@ export class QuizService {
       const { candidates } = await this.skillRadarService.analyzeUserTextSkills(userId, analysisText, 0.2);
 
       for (const candidate of candidates.slice(0, 2)) {
-        const baseDelta = answer.isCorrect ? CORRECT_SKILL_SCORE_DELTA : WRONG_SKILL_SCORE_DELTA;
-        const delta = baseDelta * candidate.confidence;
-        const current = scoreBySkillId.get(candidate.skillId) ?? {
-          delta: 0,
-          reasons: [],
-          confidence: 0,
-        };
-        current.delta += delta;
-        current.confidence = Math.max(current.confidence, candidate.confidence);
-        current.reasons.push(
-          `${candidate.skillName}: ${answer.isCorrect ? "correct" : "wrong"} answer (ai-classifier: ${candidate.reason})`,
+        await this.applyQuizAnswerSkillScore(
+          userId,
+          attemptId,
+          candidate.skillId,
+          candidate.skillName,
+          candidate.confidence,
+          answer.isCorrect,
+          `${answer.isCorrect ? "correct" : "wrong"} answer (ai-classifier: ${candidate.reason})`,
+          wrongSkillsSeenThisAttempt,
         );
-        scoreBySkillId.set(candidate.skillId, current);
       }
-    }
-
-    for (const [skillId, score] of scoreBySkillId.entries()) {
-      await this.skillRadarService.recordSkillScoreEvent({
-        userId,
-        skillId,
-        sourceType: SKILL_SCORE_SOURCE_QUIZ_ATTEMPT,
-        sourceId: attemptId,
-        scoreDelta: Math.round(score.delta * 100) / 100,
-        confidence: Math.round(score.confidence * 100) / 100,
-        reason: score.reasons.join("; "),
-      });
     }
   }
 
