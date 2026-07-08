@@ -996,7 +996,7 @@ export class SkillRadarService {
 
   async suggestQuestionSkillMappings(questionId: string) {
     const question = await this.prisma.question.findUnique({ where: { id: questionId } });
-    if (!question) throw new NotFoundException("à¹„à¸¡à¹ˆà¸žà¸šà¸„à¸³à¸–à¸²à¸¡à¸™à¸µà¹‰");
+    if (!question) throw new NotFoundException("ไม่พบคำถามนี้");
 
     const skills = await this.prisma.positionSkill.findMany({
       where: { isActive: true, position: { isActive: true } },

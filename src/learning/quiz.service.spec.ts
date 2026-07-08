@@ -12,29 +12,29 @@ const user: RequestUser = { id: "user-1", email: "user@example.com", role: "USER
 const VALID_QUESTIONS_JSON = JSON.stringify({
   questions: [
     {
-      question: "à¸‚à¹‰à¸­ 1?",
+      question: "ข้อ 1?",
       options: ["A", "B", "C", "D"],
       correctIndex: 1,
-      explanation: "à¹€à¸žà¸£à¸²à¸° B à¸–à¸¹à¸",
+      explanation: "เพราะ B ถูก",
     },
     {
-      question: "à¸‚à¹‰à¸­ 2?",
+      question: "ข้อ 2?",
       options: ["A", "B", "C", "D"],
       correctIndex: 0,
-      explanation: "à¹€à¸žà¸£à¸²à¸° A à¸–à¸¹à¸",
+      explanation: "เพราะ A ถูก",
     },
   ],
 });
 
 const VALID_TOPIC_JSON = JSON.stringify({
-  title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
-  content: "à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸—à¸µà¹ˆà¸”à¸µà¸„à¸§à¸£à¹€à¸”à¸²à¸¢à¸²à¸à¹à¸¥à¸°à¹„à¸¡à¹ˆà¹ƒà¸Šà¹‰à¸‹à¹‰à¸³\n\nà¸„à¸§à¸£à¹ƒà¸Šà¹‰à¸•à¸±à¸§à¸ˆà¸±à¸”à¸à¸²à¸£à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¹€à¸¡à¸·à¹ˆà¸­à¸•à¹‰à¸­à¸‡à¸ˆà¸³à¸«à¸¥à¸²à¸¢à¸šà¸±à¸à¸Šà¸µ",
+  title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
+  content: "รหัสผ่านที่ดีควรเดายากและไม่ใช้ซ้ำ\n\nควรใช้ตัวจัดการรหัสผ่านเมื่อต้องจำหลายบัญชี",
   questions: [
     {
-      question: "à¸‚à¹‰à¸­à¹ƒà¸”à¹€à¸›à¹‡à¸™à¹à¸™à¸§à¸—à¸²à¸‡à¸—à¸µà¹ˆà¸”à¸µ?",
-      options: ["à¹ƒà¸Šà¹‰à¸‹à¹‰à¸³à¸—à¸¸à¸à¹€à¸§à¹‡à¸š", "à¹ƒà¸Šà¹‰à¸§à¸±à¸™à¹€à¸à¸´à¸”", "à¹ƒà¸Šà¹‰à¸•à¸±à¸§à¸ˆà¸±à¸”à¸à¸²à¸£à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™", "à¸šà¸­à¸à¹€à¸žà¸·à¹ˆà¸­à¸™"],
+      question: "ข้อใดเป็นแนวทางที่ดี?",
+      options: ["ใช้ซ้ำทุกเว็บ", "ใช้วันเกิด", "ใช้ตัวจัดการรหัสผ่าน", "บอกเพื่อน"],
       correctIndex: 2,
-      explanation: "à¸•à¸±à¸§à¸ˆà¸±à¸”à¸à¸²à¸£à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸Šà¹ˆà¸§à¸¢à¸ªà¸£à¹‰à¸²à¸‡à¹à¸¥à¸°à¸ˆà¸³à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸—à¸µà¹ˆà¸‹à¸±à¸šà¸‹à¹‰à¸­à¸™",
+      explanation: "ตัวจัดการรหัสผ่านช่วยสร้างและจำรหัสผ่านที่ซับซ้อน",
     },
   ],
 });
@@ -103,8 +103,8 @@ describe("QuizService.generateFromArticle", () => {
     const { service, prisma, aiService } = makeService();
     prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({
       id: "kb-1",
-      title: "à¸§à¸´à¸˜à¸µà¸£à¸µà¹€à¸‹à¹‡à¸•à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
-      content: "à¹€à¸™à¸·à¹‰à¸­à¸«à¸²à¸—à¸”à¸ªà¸­à¸šà¸—à¸µà¹ˆà¸¡à¸µà¸„à¸§à¸²à¸¡à¸¢à¸²à¸§à¹€à¸žà¸µà¸¢à¸‡à¸žà¸­à¸ªà¸³à¸«à¸£à¸±à¸šà¸ªà¸£à¹‰à¸²à¸‡à¹à¸šà¸šà¸—à¸”à¸ªà¸­à¸šà¸ˆà¸£à¸´à¸‡",
+      title: "วิธีรีเซ็ตรหัสผ่าน",
+      content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง",
     });
     aiService.chat.mockResolvedValue(VALID_QUESTIONS_JSON);
     prisma.quiz.create.mockResolvedValue({ id: "quiz-1", questions: [{}, {}] });
@@ -117,16 +117,16 @@ describe("QuizService.generateFromArticle", () => {
     expect(createArgs.data.sourceArticleId).toBe("kb-1");
     expect(createArgs.data.questions.create).toHaveLength(2);
     expect(createArgs.data.questions.create[0]).toEqual({
-      questionText: "à¸‚à¹‰à¸­ 1?",
+      questionText: "ข้อ 1?",
       options: ["A", "B", "C", "D"],
       correctIndex: 1,
-      explanation: "à¹€à¸žà¸£à¸²à¸° B à¸–à¸¹à¸",
+      explanation: "เพราะ B ถูก",
     });
   });
 
   it("rejects malformed AI responses (e.g. missing options) instead of saving garbage", async () => {
     const { service, prisma, aiService } = makeService();
-    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "à¹€à¸™à¸·à¹‰à¸­à¸«à¸²à¸—à¸”à¸ªà¸­à¸šà¸—à¸µà¹ˆà¸¡à¸µà¸„à¸§à¸²à¸¡à¸¢à¸²à¸§à¹€à¸žà¸µà¸¢à¸‡à¸žà¸­à¸ªà¸³à¸«à¸£à¸±à¸šà¸ªà¸£à¹‰à¸²à¸‡à¹à¸šà¸šà¸—à¸”à¸ªà¸­à¸šà¸ˆà¸£à¸´à¸‡" });
+    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง" });
     aiService.chat.mockResolvedValue(JSON.stringify({ questions: [{ question: "no options" }] }));
 
     await expect(service.generateFromArticle(user, "kb-1")).rejects.toThrow(BadRequestException);
@@ -135,7 +135,7 @@ describe("QuizService.generateFromArticle", () => {
 
   it("recovers from a trailing comma (real failure seen from the AI gateway)", async () => {
     const { service, prisma, aiService } = makeService();
-    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "à¹€à¸™à¸·à¹‰à¸­à¸«à¸²à¸—à¸”à¸ªà¸­à¸šà¸—à¸µà¹ˆà¸¡à¸µà¸„à¸§à¸²à¸¡à¸¢à¸²à¸§à¹€à¸žà¸µà¸¢à¸‡à¸žà¸­à¸ªà¸³à¸«à¸£à¸±à¸šà¸ªà¸£à¹‰à¸²à¸‡à¹à¸šà¸šà¸—à¸”à¸ªà¸­à¸šà¸ˆà¸£à¸´à¸‡" });
+    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง" });
     // Strips the closing brace's trailing comma that breaks JSON.parse.
     const withTrailingComma = VALID_QUESTIONS_JSON.replace(/\]\}$/, "],}");
     aiService.chat.mockResolvedValue(withTrailingComma);
@@ -147,7 +147,7 @@ describe("QuizService.generateFromArticle", () => {
 
   it("throws BadRequestException when the AI response is unrecoverably broken", async () => {
     const { service, prisma, aiService } = makeService();
-    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "à¹€à¸™à¸·à¹‰à¸­à¸«à¸²à¸—à¸”à¸ªà¸­à¸šà¸—à¸µà¹ˆà¸¡à¸µà¸„à¸§à¸²à¸¡à¸¢à¸²à¸§à¹€à¸žà¸µà¸¢à¸‡à¸žà¸­à¸ªà¸³à¸«à¸£à¸±à¸šà¸ªà¸£à¹‰à¸²à¸‡à¹à¸šà¸šà¸—à¸”à¸ªà¸­à¸šà¸ˆà¸£à¸´à¸‡" });
+    prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({ id: "kb-1", title: "x", content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง" });
     aiService.chat.mockResolvedValue('{"questions": [{"question": "unterminated string]}');
 
     await expect(service.generateFromArticle(user, "kb-1")).rejects.toThrow(BadRequestException);
@@ -158,8 +158,8 @@ describe("QuizService.generateFromArticle", () => {
     const { service, prisma, aiService } = makeService();
     prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({
       id: "kb-1",
-      title: "à¸§à¸´à¸˜à¸µà¸£à¸µà¹€à¸‹à¹‡à¸•à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
-      content: "à¹€à¸™à¸·à¹‰à¸­à¸«à¸²à¸—à¸”à¸ªà¸­à¸šà¸—à¸µà¹ˆà¸¡à¸µà¸„à¸§à¸²à¸¡à¸¢à¸²à¸§à¹€à¸žà¸µà¸¢à¸‡à¸žà¸­à¸ªà¸³à¸«à¸£à¸±à¸šà¸ªà¸£à¹‰à¸²à¸‡à¹à¸šà¸šà¸—à¸”à¸ªà¸­à¸šà¸ˆà¸£à¸´à¸‡",
+      title: "วิธีรีเซ็ตรหัสผ่าน",
+      content: "เนื้อหาทดสอบที่มีความยาวเพียงพอสำหรับสร้างแบบทดสอบจริง",
     });
     aiService.chat
       .mockResolvedValueOnce('{"questions": [{"question": "unterminated string]}')
@@ -180,15 +180,15 @@ describe("QuizService.generateFromTopic", () => {
     prisma.lesson.aggregate.mockResolvedValue({ _max: { order: 4 } });
     prisma.lesson.create.mockResolvedValue({
       id: "lesson-1",
-      title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
+      title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
     });
 
-    const result = await service.generateFromTopic(user, "à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢");
+    const result = await service.generateFromTopic(user, "รหัสผ่านปลอดภัย");
 
     expect(result).toEqual({
       lessonId: "lesson-1",
       quizId: null,
-      title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
+      title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
     });
     expect(aiService.chat).toHaveBeenCalledWith(expect.any(Array), {
       temperature: 0.6,
@@ -196,9 +196,9 @@ describe("QuizService.generateFromTopic", () => {
     });
     expect(prisma.lesson.create).toHaveBeenCalledWith({
       data: {
-        title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
+        title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
         createdByUserId: "user-1",
-        content: "à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸—à¸µà¹ˆà¸”à¸µà¸„à¸§à¸£à¹€à¸”à¸²à¸¢à¸²à¸à¹à¸¥à¸°à¹„à¸¡à¹ˆà¹ƒà¸Šà¹‰à¸‹à¹‰à¸³\n\nà¸„à¸§à¸£à¹ƒà¸Šà¹‰à¸•à¸±à¸§à¸ˆà¸±à¸”à¸à¸²à¸£à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¹€à¸¡à¸·à¹ˆà¸­à¸•à¹‰à¸­à¸‡à¸ˆà¸³à¸«à¸¥à¸²à¸¢à¸šà¸±à¸à¸Šà¸µ",
+        content: "รหัสผ่านที่ดีควรเดายากและไม่ใช้ซ้ำ\n\nควรใช้ตัวจัดการรหัสผ่านเมื่อต้องจำหลายบัญชี",
         order: 5,
       },
     });
@@ -243,26 +243,26 @@ describe("QuizService.generateFromTopic", () => {
     const { service, prisma, aiService } = makeService();
     aiService.chat.mockResolvedValue(
       JSON.stringify({
-        title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
+        title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
         content: JSON.stringify({
-          title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
-          content: "à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸—à¸µà¹ˆà¸”à¸µà¸„à¸§à¸£à¹€à¸”à¸²à¸¢à¸²à¸à¹à¸¥à¸°à¹„à¸¡à¹ˆà¹ƒà¸Šà¹‰à¸‹à¹‰à¸³\n\nà¸„à¸§à¸£à¹ƒà¸Šà¹‰à¸•à¸±à¸§à¸ˆà¸±à¸”à¸à¸²à¸£à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¹€à¸¡à¸·à¹ˆà¸­à¸•à¹‰à¸­à¸‡à¸ˆà¸³à¸«à¸¥à¸²à¸¢à¸šà¸±à¸à¸Šà¸µ",
+          title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
+          content: "รหัสผ่านที่ดีควรเดายากและไม่ใช้ซ้ำ\n\nควรใช้ตัวจัดการรหัสผ่านเมื่อต้องจำหลายบัญชี",
         }),
       }),
     );
     prisma.lesson.aggregate.mockResolvedValue({ _max: { order: 4 } });
     prisma.lesson.create.mockResolvedValue({
       id: "lesson-1",
-      title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
+      title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
     });
 
-    await service.generateFromTopic(user, "à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢");
+    await service.generateFromTopic(user, "รหัสผ่านปลอดภัย");
 
     expect(prisma.lesson.create).toHaveBeenCalledWith({
       data: {
-        title: "à¸žà¸·à¹‰à¸™à¸à¸²à¸™à¸„à¸§à¸²à¸¡à¸›à¸¥à¸­à¸”à¸ à¸±à¸¢à¸‚à¸­à¸‡à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™",
+        title: "พื้นฐานความปลอดภัยของรหัสผ่าน",
         createdByUserId: "user-1",
-        content: "à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¸—à¸µà¹ˆà¸”à¸µà¸„à¸§à¸£à¹€à¸”à¸²à¸¢à¸²à¸à¹à¸¥à¸°à¹„à¸¡à¹ˆà¹ƒà¸Šà¹‰à¸‹à¹‰à¸³\n\nà¸„à¸§à¸£à¹ƒà¸Šà¹‰à¸•à¸±à¸§à¸ˆà¸±à¸”à¸à¸²à¸£à¸£à¸«à¸±à¸ªà¸œà¹ˆà¸²à¸™à¹€à¸¡à¸·à¹ˆà¸­à¸•à¹‰à¸­à¸‡à¸ˆà¸³à¸«à¸¥à¸²à¸¢à¸šà¸±à¸à¸Šà¸µ",
+        content: "รหัสผ่านที่ดีควรเดายากและไม่ใช้ซ้ำ\n\nควรใช้ตัวจัดการรหัสผ่านเมื่อต้องจำหลายบัญชี",
         order: 5,
       },
     });
@@ -291,7 +291,7 @@ describe("QuizService.askLessonQuestion", () => {
     });
     aiService.chat.mockResolvedValue("Answer from lesson");
 
-    const result = await service.askLessonQuestion(user, "lesson-1", "What next?", "à¸œà¸¹à¹‰à¹€à¸£à¸µà¸¢à¸™: hi");
+    const result = await service.askLessonQuestion(user, "lesson-1", "What next?", "ผู้เรียน: hi");
 
     expect(result).toEqual({ answer: "Answer from lesson", recommendedKnowledgeBases: [] });
     expect(aiService.chat).toHaveBeenCalledWith(
@@ -322,8 +322,8 @@ describe("QuizService.askLessonQuestion", () => {
     });
     aiService.chat.mockResolvedValue(
       JSON.stringify({
-        title: "à¸ªà¸£à¸¸à¸›à¹à¸šà¸šà¹€à¸‚à¹‰à¸²à¹ƒà¸ˆà¸‡à¹ˆà¸²à¸¢",
-        content: "à¹€à¸™à¸·à¹‰à¸­à¸«à¸²à¸„à¸³à¸•à¸­à¸šà¸—à¸µà¹ˆà¸œà¸¹à¹‰à¹€à¸£à¸µà¸¢à¸™à¸„à¸§à¸£à¹€à¸«à¹‡à¸™à¸„à¹ˆà¸°",
+        title: "สรุปแบบเข้าใจง่าย",
+        content: "เนื้อหาคำตอบที่ผู้เรียนควรเห็นค่ะ",
       }),
     );
 
@@ -393,11 +393,11 @@ describe("QuizService.generateQuizFromLesson", () => {
       createdByUserId: "user-1",
     });
     aiService.chat.mockResolvedValue(VALID_QUESTIONS_JSON);
-    prisma.quiz.create.mockResolvedValue({ id: "quiz-1", title: "à¹à¸šà¸šà¸—à¸”à¸ªà¸­à¸š: Lesson 1" });
+    prisma.quiz.create.mockResolvedValue({ id: "quiz-1", title: "แบบทดสอบ: Lesson 1" });
 
     const result = await service.generateQuizFromLesson(user, "lesson-1", "focus on examples");
 
-    expect(result).toEqual({ quizId: "quiz-1", title: "à¹à¸šà¸šà¸—à¸”à¸ªà¸­à¸š: Lesson 1" });
+    expect(result).toEqual({ quizId: "quiz-1", title: "แบบทดสอบ: Lesson 1" });
     expect(aiService.chat).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ content: expect.stringContaining("focus on examples") }),
@@ -412,16 +412,16 @@ describe("QuizService.generateQuizFromLesson", () => {
         questions: {
           create: [
             {
-              questionText: "à¸‚à¹‰à¸­ 1?",
+              questionText: "ข้อ 1?",
               options: ["A", "B", "C", "D"],
               correctIndex: 1,
-              explanation: "à¹€à¸žà¸£à¸²à¸° B à¸–à¸¹à¸",
+              explanation: "เพราะ B ถูก",
             },
             {
-              questionText: "à¸‚à¹‰à¸­ 2?",
+              questionText: "ข้อ 2?",
               options: ["A", "B", "C", "D"],
               correctIndex: 0,
-              explanation: "à¹€à¸žà¸£à¸²à¸° A à¸–à¸¹à¸",
+              explanation: "เพราะ A ถูก",
             },
           ],
         },
