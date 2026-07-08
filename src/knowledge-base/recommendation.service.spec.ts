@@ -195,4 +195,136 @@ describe("RecommendationService", () => {
     expect(result).toEqual([]);
     expect(prisma.knowledgeBaseArticle.findMany).not.toHaveBeenCalled();
   });
+
+  it("searches and normalizes Knowledge Base candidates from multiple signals", async () => {
+    prisma.knowledgeBaseArticle.findMany.mockResolvedValue([
+      makeArticle({
+        id: "kb-next-ui",
+        title: "เลือก UI library สำหรับ Next.js",
+        summary: "เปรียบเทียบ Ant Design และ MUI สำหรับเว็บขายของ",
+        content: "แนวทางเลือก component library สำหรับ ecommerce",
+        keywords: ["Next.js", "Ant Design", "MUI"],
+        tags: ["frontend", "ui"],
+      }),
+    ]);
+
+    const result = await service.searchCandidates({
+      originalQuestion: "next.js ใช้ ant design หรือ mui ดี",
+      interpretedQuestion: "Compare Ant Design and MUI for Next.js ecommerce",
+      keywords: ["Next.js", "Ant Design", "MUI"],
+      possibleSkills: [{ skillName: "FrontEnd", confidence: 0.8 }],
+      limit: 5,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      id: "kb-next-ui",
+      title: "เลือก UI library สำหรับ Next.js",
+      tags: expect.arrayContaining(["Next.js", "Ant Design", "MUI", "frontend", "ui"]),
+    });
+    expect(result[0].databaseRelevanceScore).toBeGreaterThan(0);
+    expect(result[0].contentPreview?.length).toBeLessThanOrEqual(500);
+  });
+
+  it("reranks candidates with AI and filters unknown ids", async () => {
+    aiService.chat.mockResolvedValue(
+      JSON.stringify({
+        recommendations: [
+          {
+            knowledgeBaseId: "kb-1",
+            confidenceScore: 0.87,
+            matchedSkills: ["FrontEnd"],
+            reason: "ตรงกับ Next.js และ UI library",
+            whyThisKBIsRelevant: "ช่วยตอบคำถามเรื่องการเลือก Ant Design หรือ MUI",
+            shouldRecommend: true,
+          },
+          {
+            knowledgeBaseId: "unknown-id",
+            confidenceScore: 0.99,
+            matchedSkills: ["FrontEnd"],
+            reason: "AI invented this id",
+            whyThisKBIsRelevant: "invalid",
+            shouldRecommend: true,
+          },
+        ],
+      }),
+    );
+
+    const result = await service.rerankCandidates({
+      analysis: {
+        originalQuestion: "next.js ใช้ ant design หรือ mui ดี",
+        interpretedQuestion: "Compare Ant Design and MUI for Next.js ecommerce",
+        intent: "compare_ui_library",
+        possibleSkills: [{ skillName: "FrontEnd", confidence: 0.8 }],
+        keywords: ["Next.js", "Ant Design", "MUI"],
+        difficultyGuess: "intermediate",
+        questionQualityScore: 0.8,
+      },
+      candidates: [
+        {
+          id: "kb-1",
+          title: "เลือก UI library สำหรับ Next.js",
+          summary: "เปรียบเทียบ Ant Design และ MUI",
+          tags: ["Next.js", "MUI"],
+          relatedSkills: ["FrontEnd"],
+          contentPreview: "preview",
+          databaseRelevanceScore: 0.4,
+        },
+      ],
+    });
+
+    expect(result).toEqual([
+      {
+        knowledgeBaseId: "kb-1",
+        confidenceScore: 0.87,
+        matchedSkills: ["FrontEnd"],
+        reason: "ตรงกับ Next.js และ UI library",
+        whyThisKBIsRelevant: "ช่วยตอบคำถามเรื่องการเลือก Ant Design หรือ MUI",
+        shouldRecommend: true,
+      },
+    ]);
+  });
+
+  it("falls back to database score when AI reranking fails", async () => {
+    aiService.chat.mockRejectedValue(new Error("AI down"));
+
+    const result = await service.rerankCandidates({
+      analysis: {
+        originalQuestion: "merge workflow",
+        interpretedQuestion: "merge workflow",
+        intent: "learn_workflow",
+        possibleSkills: [],
+        keywords: ["merge", "workflow"],
+        difficultyGuess: "unknown",
+        questionQualityScore: 0.5,
+      },
+      candidates: [
+        {
+          id: "kb-low",
+          title: "Low score",
+          tags: [],
+          relatedSkills: [],
+          databaseRelevanceScore: 0.05,
+        },
+        {
+          id: "kb-high",
+          title: "High score",
+          tags: ["merge"],
+          relatedSkills: ["DevOps"],
+          databaseRelevanceScore: 0.42,
+        },
+      ],
+    });
+
+    expect(result).toEqual([
+      {
+        knowledgeBaseId: "kb-high",
+        confidenceScore: 0.42,
+        matchedSkills: ["DevOps"],
+        reason: "Fallback database relevance score",
+        whyThisKBIsRelevant: "AI reranking was unavailable, so this item was selected by local relevance score.",
+        shouldRecommend: false,
+      },
+    ]);
+  });
 });
