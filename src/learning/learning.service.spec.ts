@@ -161,15 +161,21 @@ describe("LearningService.getLesson", () => {
 });
 
 describe("LearningService.markLessonCompleted", () => {
-  it("upserts completed progress for the current user", async () => {
-    const { service, prisma } = makeService();
+  it("upserts completed progress and records lesson completion skill signals for the current user", async () => {
+    const { service, prisma, skillRadarService } = makeService();
     prisma.lessonProgress.upsert.mockResolvedValue({
       lessonId: "l1",
       completed: true,
       completedAt: new Date("2026-01-04"),
     });
+    prisma.lessonProgress.findUnique.mockResolvedValue(null);
 
-    prisma.lesson.findUnique.mockResolvedValue({ id: "l1", createdByUserId: "user-1" });
+    prisma.lesson.findUnique.mockResolvedValue({
+      id: "l1",
+      title: "Docker Desktop",
+      content: "เรียนรู้การติดตั้งและใช้งาน Docker เบื้องต้น",
+      createdByUserId: "user-1",
+    });
 
     const result = await service.markLessonCompleted(user, "l1");
 
@@ -188,5 +194,35 @@ describe("LearningService.markLessonCompleted", () => {
         completedAt: expect.any(Date),
       },
     });
+    expect(skillRadarService.recordLessonCompletionSkillSignals).toHaveBeenCalledWith({
+      userId: "user-1",
+      lessonId: "l1",
+      lessonTitle: "Docker Desktop",
+      lessonContent: "เรียนรู้การติดตั้งและใช้งาน Docker เบื้องต้น",
+    });
+  });
+
+  it("does not record lesson completion skill signals again when the lesson was already completed", async () => {
+    const { service, prisma, skillRadarService } = makeService();
+    prisma.lesson.findUnique.mockResolvedValue({
+      id: "l1",
+      title: "Docker Desktop",
+      content: "เรียนรู้การติดตั้งและใช้งาน Docker เบื้องต้น",
+      createdByUserId: "user-1",
+    });
+    prisma.lessonProgress.findUnique.mockResolvedValue({
+      lessonId: "l1",
+      completed: true,
+      completedAt: new Date("2026-01-03"),
+    });
+    prisma.lessonProgress.upsert.mockResolvedValue({
+      lessonId: "l1",
+      completed: true,
+      completedAt: new Date("2026-01-04"),
+    });
+
+    await service.markLessonCompleted(user, "l1");
+
+    expect(skillRadarService.recordLessonCompletionSkillSignals).not.toHaveBeenCalled();
   });
 });

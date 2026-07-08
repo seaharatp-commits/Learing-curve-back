@@ -121,16 +121,16 @@ export class LearningService {
     });
 
     if (isFirstCompletion) {
-      this.skillRadarService
-        .recordLessonCompletionSkillSignals({
+      try {
+        await this.skillRadarService.recordLessonCompletionSkillSignals({
           userId,
           lessonId,
           lessonTitle: lesson.title,
           lessonContent: lesson.content,
-        })
-        .catch((error) => {
-          this.logger.warn(`Failed to record lesson completion skill signal: ${error}`);
         });
+      } catch (error) {
+        this.logger.warn(`Failed to record lesson completion skill signal: ${error}`);
+      }
     }
 
     return {
