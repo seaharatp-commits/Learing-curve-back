@@ -7,7 +7,7 @@ const user: RequestUser = { id: "user-1", email: "user@example.com", role: "USER
 
 function makeService() {
   const prisma = {
-    lesson: { count: jest.fn(), findMany: jest.fn(), findUnique: jest.fn() },
+    lesson: { count: jest.fn(), findMany: jest.fn(), findUnique: jest.fn(), delete: jest.fn() },
     lessonProgress: { count: jest.fn(), upsert: jest.fn(), findUnique: jest.fn() },
     quizAttempt: { findMany: jest.fn() },
   };
@@ -224,5 +224,44 @@ describe("LearningService.markLessonCompleted", () => {
     await service.markLessonCompleted(user, "l1");
 
     expect(skillRadarService.recordLessonCompletionSkillSignals).not.toHaveBeenCalled();
+  });
+});
+
+describe("LearningService.deleteLesson", () => {
+  it("deletes a lesson owned by the current user", async () => {
+    const { service, prisma } = makeService();
+    prisma.lesson.findUnique.mockResolvedValue({ id: "l1", createdByUserId: "user-1" });
+
+    const result = await service.deleteLesson(user, "l1");
+
+    expect(result).toEqual({ success: true });
+    expect(prisma.lesson.delete).toHaveBeenCalledWith({ where: { id: "l1" } });
+  });
+
+  it("throws NotFoundException when the lesson does not exist", async () => {
+    const { service, prisma } = makeService();
+    prisma.lesson.findUnique.mockResolvedValue(null);
+
+    await expect(service.deleteLesson(user, "missing")).rejects.toThrow("ไม่พบบทเรียนนี้");
+    expect(prisma.lesson.delete).not.toHaveBeenCalled();
+  });
+
+  it("throws NotFoundException (not Forbidden) when a non-admin user does not own the lesson", async () => {
+    const { service, prisma } = makeService();
+    prisma.lesson.findUnique.mockResolvedValue({ id: "l1", createdByUserId: "someone-else" });
+
+    await expect(service.deleteLesson(user, "l1")).rejects.toThrow("ไม่พบบทเรียนนี้");
+    expect(prisma.lesson.delete).not.toHaveBeenCalled();
+  });
+
+  it("allows an ADMIN to delete a lesson owned by another user", async () => {
+    const { service, prisma } = makeService();
+    const admin: RequestUser = { id: "admin-1", email: "admin@example.com", role: "ADMIN" };
+    prisma.lesson.findUnique.mockResolvedValue({ id: "l1", createdByUserId: "someone-else" });
+
+    const result = await service.deleteLesson(admin, "l1");
+
+    expect(result).toEqual({ success: true });
+    expect(prisma.lesson.delete).toHaveBeenCalledWith({ where: { id: "l1" } });
   });
 });

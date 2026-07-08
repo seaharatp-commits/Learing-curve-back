@@ -139,4 +139,15 @@ export class LearningService {
       completedAt: progress.completedAt,
     };
   }
+
+  async deleteLesson(user: RequestUser, lessonId: string): Promise<{ success: boolean }> {
+    const lesson = await this.prisma.lesson.findUnique({ where: { id: lessonId } });
+    if (!lesson) throw new NotFoundException("ไม่พบบทเรียนนี้");
+    if (user.role !== "ADMIN" && lesson.createdByUserId !== user.id) {
+      throw new NotFoundException("ไม่พบบทเรียนนี้");
+    }
+
+    await this.prisma.lesson.delete({ where: { id: lessonId } });
+    return { success: true };
+  }
 }
