@@ -429,6 +429,9 @@ describe("SkillRadarService.getCareerAlignment", () => {
     expect(upsertArg.create.skillScoreHash).toBe("s1:70|s2:60|s3:0");
     expect(upsertArg.create.scoreSumSnapshot).toBe(130);
     expect(upsertArg.create.generatedBy).toBe("ai");
+    expect(aiService.chat.mock.calls[0][0][0].content).toContain("Use ONLY strengths, description, and nextSteps");
+    expect(aiService.chat.mock.calls[0][0][0].content).toContain("Do NOT output or imply weaknesses");
+    expect(aiService.chat.mock.calls[0][0][0].content).toContain("NEVER make the learner feel judged");
   });
 
   it("returns the cached row WITHOUT calling the AI when the skill-score hash is unchanged", async () => {
