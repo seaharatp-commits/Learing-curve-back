@@ -59,26 +59,50 @@ const SUGGESTED_QUESTIONS_MIN = 3;
 const SUGGESTED_QUESTIONS_MAX = 5;
 const SUGGESTED_QUESTIONS_DISPLAY_LIMIT = 3;
 const SUGGESTED_QUESTIONS_OPTIONS = { temperature: 0.7, maxTokens: 500 };
-const RECENT_HISTORY_LIMIT = 5;
+const RECENT_ACTIVITY_LIMIT = 10;
 
 const SUGGESTED_QUESTIONS_SYSTEM_PROMPT = [
   "You generate example follow-up questions a learner could tap to start a chat on a learning platform.",
   "Return ONLY a JSON array of 3 to 5 short question strings in Thai. No markdown, no commentary, no object wrapper.",
   "Each question must be realistic, specific, and something the given learner would plausibly ask next.",
-  "Base the questions on the learner's current position and, when provided, their recent topics/questions and weaker skills.",
-  "If recent activity is empty or very limited, generate general starter questions for the learner's position instead of inventing fake history.",
+  "Base the questions on the learner's current position and the latestActivities list when it has items.",
+  "latestActivities contains the learner's 10 most recent actions across chat, lessons, quizzes, Knowledge Base answers, and Skill Radar signals.",
+  "If latestActivities is empty, generate general starter questions for the learner's selected position and skills instead of inventing fake history.",
   "Do not repeat the learner's recent questions verbatim — build on them or explore a related angle.",
   "Keep each question under 100 characters.",
 ].join("\n");
 
+interface SuggestedQuestionActivity {
+  type: "chat_question" | "lesson_created" | "quiz_attempt" | "kb_answer" | "skill_signal";
+  title: string;
+  detail?: string;
+  score?: number;
+  createdAt: string;
+}
+
+interface RecentSkillScoreEvent {
+  skill: { name: string };
+  position: { name: string };
+  sourceType: string;
+  scoreAfter: number;
+  createdAt: Date | string;
+}
+
 interface SuggestedQuestionsSummary {
   currentPosition: string;
+  positionSkills: string[];
   topSkills: string[];
   weakSkills: string[];
+  latestActivities: SuggestedQuestionActivity[];
   recentTopics: string[];
   recentQuestions: string[];
   learningProgress: { completedLessons: number; totalLessons: number; percentage: number };
   recommendedKnowledgeBase: string[];
+}
+
+interface SuggestedQuestionsCacheEntry {
+  signature: string;
+  questions: string[];
 }
 
 export interface ChatRecommendedKnowledgeBase {
@@ -102,6 +126,7 @@ interface ChatRecommendationFlowResult {
 @Injectable()
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
+  private readonly suggestedQuestionsCache = new Map<string, SuggestedQuestionsCacheEntry>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -173,6 +198,11 @@ export class ChatService {
       ].join("\n\n");
     }
     return `คำตอบนี้ไม่ได้อ้างอิงจากฐานความรู้ที่แอดมินเพิ่มไว้โดยตรง แต่เป็นคำตอบจากความรู้ทั่วไปของ AI: รับทราบคำถาม "${content}" แล้วค่ะ`;
+  }
+
+  private toActivityIso(value?: Date | string | null): string {
+    const date = value ? new Date(value) : new Date(0);
+    return Number.isNaN(date.getTime()) ? new Date(0).toISOString() : date.toISOString();
   }
 
   private async generateAiReply(
@@ -395,33 +425,39 @@ export class ChatService {
   }
 
   private async buildSuggestedQuestionsSummary(userId: string): Promise<SuggestedQuestionsSummary> {
-    const [radar, recentUserMessages, recentLessons, recentAttempts, recentKbAnswers, totalLessons, completedLessons] =
+    const [radar, recentUserMessages, recentLessons, recentAttempts, recentKbAnswers, recentSkillEvents, totalLessons, completedLessons] =
       await Promise.all([
         this.skillRadarService.getUserRadar(userId).catch(() => null),
         this.prisma.chatMessage.findMany({
           where: { role: "USER", session: { userId } },
           orderBy: { createdAt: "desc" },
-          take: RECENT_HISTORY_LIMIT,
-          select: { content: true },
+          take: RECENT_ACTIVITY_LIMIT,
+          select: { content: true, createdAt: true },
         }),
         this.prisma.lesson.findMany({
           where: { createdByUserId: userId },
           orderBy: { createdAt: "desc" },
-          take: RECENT_HISTORY_LIMIT,
-          select: { title: true },
+          take: RECENT_ACTIVITY_LIMIT,
+          select: { title: true, createdAt: true },
         }),
         this.prisma.quizAttempt.findMany({
           where: { userId },
           orderBy: { completedAt: "desc" },
-          take: RECENT_HISTORY_LIMIT,
+          take: RECENT_ACTIVITY_LIMIT,
           include: { quiz: { select: { title: true } } },
         }),
         this.prisma.chatMessage.findMany({
           where: { role: "ASSISTANT", sourceType: "KNOWLEDGE_BASE", session: { userId } },
           orderBy: { createdAt: "desc" },
-          take: RECENT_HISTORY_LIMIT,
-          select: { sourceArticleTitle: true },
+          take: RECENT_ACTIVITY_LIMIT,
+          select: { sourceArticleTitle: true, sourceConfidenceScore: true, createdAt: true },
         }),
+        (this.prisma.skillScoreEvent as unknown as { findMany?: (args: unknown) => Promise<RecentSkillScoreEvent[]> } | undefined)?.findMany?.({
+          where: { userId },
+          orderBy: { createdAt: "desc" },
+          take: RECENT_ACTIVITY_LIMIT,
+          include: { skill: { select: { name: true } }, position: { select: { name: true } } },
+        }) ?? Promise.resolve([] as RecentSkillScoreEvent[]),
         this.prisma.lesson.count({ where: { createdByUserId: userId } }),
         this.prisma.lessonProgress.count({ where: { userId, completed: true } }),
       ]);
@@ -430,12 +466,13 @@ export class ChatService {
     const topSkills = [...skillsWithEvidence].sort((a, b) => b.score - a.score).slice(0, 3).map((skill) => skill.name);
     const weakSkills = [...skillsWithEvidence].sort((a, b) => a.score - b.score).slice(0, 3).map((skill) => skill.name);
 
+    const positionSkills = radar?.skills.map((skill) => skill.name) ?? [];
     const recentTopics = Array.from(
       new Set([
         ...recentLessons.map((lesson) => lesson.title),
         ...recentAttempts.map((attempt) => attempt.quiz.title),
       ]),
-    ).slice(0, RECENT_HISTORY_LIMIT);
+    ).slice(0, RECENT_ACTIVITY_LIMIT);
 
     const recommendedKnowledgeBase = Array.from(
       new Set(
@@ -445,10 +482,51 @@ export class ChatService {
       ),
     ).slice(0, 3);
 
+    const latestActivities: SuggestedQuestionActivity[] = [
+      ...recentUserMessages.map((message) => ({
+        type: "chat_question" as const,
+        title: message.content.slice(0, 160),
+        createdAt: this.toActivityIso(message.createdAt),
+      })),
+      ...recentLessons.map((lesson) => ({
+        type: "lesson_created" as const,
+        title: lesson.title,
+        createdAt: this.toActivityIso(lesson.createdAt),
+      })),
+      ...recentAttempts.map((attempt) => ({
+        type: "quiz_attempt" as const,
+        title: attempt.quiz.title,
+        score: attempt.score,
+        createdAt: this.toActivityIso(attempt.completedAt),
+      })),
+      ...recentKbAnswers
+        .filter((message) => !!message.sourceArticleTitle)
+        .map((message) => ({
+          type: "kb_answer" as const,
+          title: message.sourceArticleTitle ?? "",
+          score:
+            message.sourceConfidenceScore === null || message.sourceConfidenceScore === undefined
+              ? undefined
+              : Math.round(message.sourceConfidenceScore * 100),
+          createdAt: this.toActivityIso(message.createdAt),
+        })),
+      ...recentSkillEvents.map((event) => ({
+        type: "skill_signal" as const,
+        title: event.skill.name,
+        detail: `${event.position.name}: ${event.sourceType}`,
+        score: Math.round(event.scoreAfter),
+        createdAt: this.toActivityIso(event.createdAt),
+      })),
+    ]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, RECENT_ACTIVITY_LIMIT);
+
     return {
       currentPosition: radar?.position.name ?? "Software Engineer",
+      positionSkills,
       topSkills,
       weakSkills,
+      latestActivities,
       recentTopics,
       recentQuestions: recentUserMessages.map((message) => message.content),
       learningProgress: {
@@ -482,19 +560,136 @@ export class ChatService {
     return questions;
   }
 
+  private pickThreeQuestions(questions: string[]): string[] {
+    return Array.from(new Set(questions.map((question) => question.trim()).filter(Boolean)))
+      .sort(() => Math.random() - 0.5)
+      .slice(0, SUGGESTED_QUESTIONS_DISPLAY_LIMIT);
+  }
+
+  private buildPositionStarterQuestions(positionName: string, skills: string[]): string[] {
+    const positionQuestions: Record<string, string[]> = {
+      "Software Engineer": [
+        "ควรเริ่มฝึกออกแบบระบบเว็บจากส่วนไหนก่อนดี?",
+        "อยากพัฒนา FrontEnd และ BackEnd ควรเรียนอะไรต่อ?",
+        "ช่วยวางแผนฝึกทำโปรเจกต์ Software Engineer ให้หน่อย",
+        "ถ้าจะเตรียมตัวสมัครงานสาย Software Engineer ควรโฟกัสอะไร?",
+      ],
+      "UX/UI Designer": [
+        "อยากเริ่มทำ UX/UI Portfolio ควรเริ่มจากอะไร?",
+        "ช่วยอธิบายความต่างระหว่าง UX Research กับ UI Design",
+        "ถ้าจะออกแบบหน้าจอให้ใช้ง่าย ควรเช็กอะไรบ้าง?",
+        "อยากฝึก Design System ควรเริ่มจากส่วนไหน?",
+      ],
+      Investor: [
+        "อยากเริ่มวิเคราะห์หุ้นควรดูตัวเลขอะไรเป็นอันดับแรก?",
+        "ช่วยอธิบาย Risk Management สำหรับนักลงทุนมือใหม่",
+        "จะประเมินมูลค่าธุรกิจแบบง่าย ๆ ได้อย่างไร?",
+        "ควรจัดพอร์ตลงทุนให้เหมาะกับความเสี่ยงยังไง?",
+      ],
+      "Financial Accounting": [
+        "อยากเข้าใจงบการเงินควรเริ่มจากงบไหนก่อน?",
+        "ช่วยอธิบายพื้นฐานบัญชีเดบิตเครดิตแบบเข้าใจง่าย",
+        "ถ้าจะตรวจความถูกต้องของรายงานการเงินควรดูอะไร?",
+        "ภาษีพื้นฐานที่นักบัญชีควรรู้มีอะไรบ้าง?",
+      ],
+      "Project Manager": [
+        "อยากวางแผนโปรเจกต์ให้ไม่หลุด deadline ควรทำยังไง?",
+        "ช่วยอธิบาย Risk Management ในโปรเจกต์แบบง่าย ๆ",
+        "ถ้าทีมสื่อสารไม่ตรงกัน PM ควรแก้ยังไง?",
+        "Agile กับ Scrum ต่างกันอย่างไรสำหรับ Project Manager?",
+      ],
+      "Sales Manager": [
+        "อยากวางแผน Sales Pipeline ควรเริ่มจากอะไร?",
+        "ช่วยอธิบายการติดตาม Lead ใน CRM แบบเป็นขั้นตอน",
+        "ถ้าปิดการขายไม่ได้ ควรวิเคราะห์จากจุดไหน?",
+        "Sales Manager ควรดู KPI อะไรบ้าง?",
+      ],
+      "IT Support": [
+        "ถ้าคอมพิวเตอร์เปิดไม่ติดควรไล่เช็กอะไรบ้าง?",
+        "ช่วยอธิบายการแก้ปัญหา Network เบื้องต้น",
+        "IT Support ควรถามข้อมูลอะไรจากผู้ใช้ก่อนเริ่มแก้ปัญหา?",
+        "อยากฝึก Troubleshooting ให้เก่งขึ้นควรเริ่มอย่างไร?",
+      ],
+    };
+
+    const skillQuestions = skills.slice(0, 4).map((skill) => `ถ้าอยากพัฒนา ${skill} ควรเริ่มเรียนหรือฝึกอะไรดี?`);
+    return this.pickThreeQuestions([
+      ...(positionQuestions[positionName] ?? []),
+      ...skillQuestions,
+      `ช่วยแนะนำเส้นทางเรียนสำหรับสาย ${positionName} ให้หน่อย`,
+      `ทักษะสำคัญของ ${positionName} ที่ควรเริ่มฝึกมีอะไรบ้าง?`,
+    ]);
+  }
+
+  private buildFallbackSuggestedQuestions(summary: SuggestedQuestionsSummary): string[] {
+    if (summary.latestActivities.length === 0) {
+      return this.buildPositionStarterQuestions(summary.currentPosition, summary.positionSkills);
+    }
+
+    const activityQuestions = summary.latestActivities.slice(0, 6).flatMap((activity) => {
+      const title = activity.title.slice(0, 45);
+      if (activity.type === "chat_question") {
+        return [`ช่วยต่อยอดจากคำถามเรื่อง "${title}" ให้ลึกขึ้นหน่อย`, `มีตัวอย่างจริงของ "${title}" ไหม?`];
+      }
+      if (activity.type === "quiz_attempt") {
+        return [`จากแบบทดสอบ "${title}" ควรทบทวนเรื่องไหนต่อ?`, `ช่วยสรุปจุดสำคัญของ "${title}" ให้หน่อย`];
+      }
+      if (activity.type === "lesson_created") {
+        return [`บทเรียน "${title}" ควรเรียนต่อยอดเรื่องอะไร?`, `ช่วยยกตัวอย่างการใช้ "${title}" แบบใช้งานจริง`];
+      }
+      return [`ช่วยอธิบายเพิ่มเติมเกี่ยวกับ "${title}" ให้เข้าใจง่ายขึ้น`];
+    });
+
+    return this.pickThreeQuestions([
+      ...activityQuestions,
+      ...summary.topSkills.map((skill) => `ถ้าอยากต่อยอด ${skill} ควรถาม AI เรื่องอะไรต่อ?`),
+      ...this.buildPositionStarterQuestions(summary.currentPosition, summary.positionSkills),
+    ]);
+  }
+
+  private buildSuggestedQuestionsSignature(summary: SuggestedQuestionsSummary): string {
+    return JSON.stringify({
+      currentPosition: summary.currentPosition,
+      positionSkills: summary.positionSkills,
+      topSkills: summary.topSkills,
+      weakSkills: summary.weakSkills,
+      latestActivities: summary.latestActivities.map((activity) => ({
+        type: activity.type,
+        title: activity.title,
+        detail: activity.detail ?? null,
+        score: activity.score ?? null,
+        createdAt: activity.createdAt,
+      })),
+    });
+  }
+
   async getSuggestedQuestions(userId: string): Promise<{ questions: string[] }> {
     try {
       const summary = await this.buildSuggestedQuestionsSummary(userId);
-      const reply = await this.aiService.chat(
-        [
-          { role: "system", content: SUGGESTED_QUESTIONS_SYSTEM_PROMPT },
-          { role: "user", content: JSON.stringify(summary) },
-        ],
-        SUGGESTED_QUESTIONS_OPTIONS,
-      );
+      const signature = this.buildSuggestedQuestionsSignature(summary);
+      const cached = this.suggestedQuestionsCache.get(userId);
+      if (cached?.signature === signature) {
+        return { questions: cached.questions };
+      }
 
-      const questions = this.parseSuggestedQuestions(reply).slice(0, SUGGESTED_QUESTIONS_DISPLAY_LIMIT);
-      return { questions };
+      try {
+        const reply = await this.aiService.chat(
+          [
+            { role: "system", content: SUGGESTED_QUESTIONS_SYSTEM_PROMPT },
+            { role: "user", content: JSON.stringify(summary) },
+          ],
+          SUGGESTED_QUESTIONS_OPTIONS,
+        );
+
+        const questions = this.parseSuggestedQuestions(reply).slice(0, SUGGESTED_QUESTIONS_DISPLAY_LIMIT);
+        this.suggestedQuestionsCache.set(userId, { signature, questions });
+        return { questions };
+      } catch (error) {
+        this.logger.warn(`AI suggested questions unavailable, using activity fallback: ${error}`);
+        const questions = this.buildFallbackSuggestedQuestions(summary);
+        this.suggestedQuestionsCache.set(userId, { signature, questions });
+        return { questions };
+      }
     } catch (error) {
       this.logger.warn(`AI ล่ม: suggested questions unavailable, using default list: ${error}`);
       return { questions: DEFAULT_SUGGESTED_QUESTIONS.slice(0, SUGGESTED_QUESTIONS_DISPLAY_LIMIT) };

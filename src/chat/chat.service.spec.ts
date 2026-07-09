@@ -1,4 +1,4 @@
-import { ChatService, DEFAULT_SUGGESTED_QUESTIONS } from "./chat.service";
+import { ChatService } from "./chat.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import { AiQuestionUnderstandingService } from "../ai/ai-question-understanding.service";
@@ -73,25 +73,53 @@ describe("ChatService.getSuggestedQuestions", () => {
     expect(summary.topSkills).toEqual(["FrontEnd", "BackEnd"]);
     expect(summary.recentQuestions).toEqual(["next.js ควรทำยังไงดี"]);
     expect(summary.recentTopics).toEqual(expect.arrayContaining(["React Basics", "Frontend Quiz"]));
+    expect(summary.positionSkills).toEqual(["FrontEnd", "BackEnd", "DevOps"]);
+    expect(summary.latestActivities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "chat_question" }),
+        expect.objectContaining({ type: "lesson_created", title: "React Basics" }),
+        expect.objectContaining({ type: "quiz_attempt", title: "Frontend Quiz" }),
+      ]),
+    );
+    expect(summary.latestActivities.length).toBeLessThanOrEqual(10);
     expect(summary.learningProgress).toEqual({ completedLessons: 2, totalLessons: 4, percentage: 50 });
     expect(summary.recommendedKnowledgeBase).toEqual(["คู่มือ Next.js เบื้องต้น"]);
   });
 
-  it("falls back to the default question list when the AI Center is unavailable", async () => {
+  it("falls back to activity-based questions when the AI Center is unavailable", async () => {
     const { service, aiService } = makeService();
     aiService.chat.mockRejectedValue(new Error("AI down"));
 
     const result = await service.getSuggestedQuestions("user-1");
 
-    expect(result.questions).toEqual(DEFAULT_SUGGESTED_QUESTIONS.slice(0, 3));
+    expect(result.questions).toHaveLength(3);
+    expect(result.questions.every((question) => question.length > 0)).toBe(true);
   });
 
-  it("falls back to the default question list when the AI returns too few usable questions", async () => {
+  it("falls back to activity-based questions when the AI returns too few usable questions", async () => {
     const { service, aiService } = makeService();
     aiService.chat.mockResolvedValue(JSON.stringify(["Only one question?"]));
 
     const result = await service.getSuggestedQuestions("user-1");
 
-    expect(result.questions).toEqual(DEFAULT_SUGGESTED_QUESTIONS.slice(0, 3));
+    expect(result.questions).toHaveLength(3);
+    expect(result.questions.every((question) => question.length > 0)).toBe(true);
+  });
+
+  it("reuses cached suggested questions when the activity snapshot is unchanged", async () => {
+    const { service, aiService } = makeService();
+    aiService.chat.mockResolvedValue(
+      JSON.stringify([
+        "ควรต่อยอด Next.js เรื่อง performance อย่างไร?",
+        "ถ้าจะทำเว็บขายของควรจัด component ยังไง?",
+        "ควรทบทวน FrontEnd Quiz เรื่องไหนก่อน?",
+      ]),
+    );
+
+    const first = await service.getSuggestedQuestions("user-1");
+    const second = await service.getSuggestedQuestions("user-1");
+
+    expect(second.questions).toEqual(first.questions);
+    expect(aiService.chat).toHaveBeenCalledTimes(1);
   });
 });
