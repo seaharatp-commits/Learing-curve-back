@@ -303,6 +303,7 @@ model CareerAlignment {
   alignmentScore   Float    @default(0)
   level            String
   description      String
+  quotes           String[] @default([])
   strengths        String[] @default([])
   nextSteps        String[] @default([])
   /// "ai" when the description came from the AI Center, "fallback" otherwise.

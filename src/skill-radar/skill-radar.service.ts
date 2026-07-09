@@ -64,14 +64,17 @@ const INTEREST_HIGH_SCORE = 1;
 const INTEREST_LOW_SCORE = 0.5;
 const CAREER_ALIGNMENT_AI_OPTIONS = { temperature: 0.6, maxTokens: 500 };
 const CAREER_ALIGNMENT_MAX_DESCRIPTION_LENGTH = 400;
+const CAREER_ALIGNMENT_MAX_QUOTES = 4;
+const CAREER_ALIGNMENT_MAX_QUOTE_LENGTH = 110;
 const CAREER_ALIGNMENT_MAX_NEXT_STEP_LENGTH = 120;
 const CAREER_ALIGNMENT_MAX_NEXT_STEPS = 4;
 const CAREER_ALIGNMENT_SYSTEM_PROMPT = [
   "You write encouraging Career Alignment content in Thai for a learner on a learning platform.",
   "You are given the learner's position, a computed alignment level, and their strongest skills.",
   "Return STRICT JSON only (no markdown, no code fences), shaped exactly as:",
-  '{ "description": string, "nextSteps": string[] }',
-  "Use ONLY strengths, description, and nextSteps. Do NOT output or imply weaknesses, weak points, gaps, risk scores, or judgment labels.",
+  '{ "description": string, "quotes": string[], "nextSteps": string[] }',
+  "Use ONLY strengths, quotes, description, and nextSteps. Do NOT output or imply weaknesses, weak points, gaps, risk scores, or judgment labels.",
+  "quotes: 2-4 short Thai motivational quotes for this learner. Each quote should be warm, positive, non-judgmental, and suitable to rotate on the dashboard every 2.2 seconds.",
   "description: 2-3 sentences of plain Thai that mention the strengths naturally and encourage the learner to keep going.",
   "nextSteps: 2-4 short, concrete, positively-framed Thai action items the learner can do next (e.g. ทำ quiz เพิ่ม, เรียนหัวข้อใหม่).",
   "TONE RULES: Always positive and supportive. NEVER make the learner feel judged, criticized, behind, or 'not good enough'. Frame everything as growth and momentum, not as weaknesses or gaps.",
@@ -379,6 +382,7 @@ export class SkillRadarService {
       alignmentScore: result.alignmentScore,
       level: result.level,
       description: content.description,
+      quotes: content.quotes,
       strengths: result.strengths,
       nextSteps: content.nextSteps,
       generatedBy: content.generatedBy,
@@ -419,6 +423,7 @@ export class SkillRadarService {
       alignmentScore: number;
       strengths: string[];
       description: string;
+      quotes?: string[];
       nextSteps: string[];
       generatedBy: string;
     },
@@ -429,19 +434,36 @@ export class SkillRadarService {
       alignmentScore: row.alignmentScore,
       strengths: row.strengths,
       description: row.description,
+      quotes: row.quotes && row.quotes.length > 0 ? row.quotes : this.defaultAlignmentQuotes(row.strengths),
       nextSteps: row.nextSteps,
       generatedBy: row.generatedBy === "ai" ? "ai" : "fallback",
     };
   }
 
+  private defaultAlignmentQuotes(strengths: string[] = []): string[] {
+    if (strengths.length === 0) {
+      return [
+        "คุณไม่จำเป็นต้องเก่งตั้งแต่แรก แต่คุณต้องเริ่มเพื่อที่จะเก่ง",
+        "ทุกคำถามที่คุณถาม คือก้าวเล็ก ๆ ที่พาคุณใกล้เป้าหมายขึ้น",
+        "เริ่มจากวันนี้ แล้วทักษะจะค่อย ๆ ชัดขึ้นในแบบของคุณ",
+      ];
+    }
+    return [
+      "คุณกำลังสร้างจุดแข็งของตัวเองให้ชัดขึ้นทีละก้าว",
+      `จุดเด่นด้าน ${strengths.slice(0, 2).join(" และ ")} กำลังพาคุณไปได้ดี`,
+      "ความสม่ำเสมอเล็ก ๆ วันนี้ จะกลายเป็นความมั่นใจในวันต่อไป",
+    ];
+  }
+
   private buildAlignmentFallback(
     positionName: string,
     result: CareerAlignmentResult,
-  ): { description: string; nextSteps: string[] } {
+  ): { description: string; quotes: string[]; nextSteps: string[] } {
     if (result.strengths.length === 0) {
       return {
         description:
           "เริ่มต้นเก็บ evidence ด้วยการทำ quiz หรือถาม AI Chat แล้วระบบจะช่วยประเมินความสอดคล้องกับสายงานของคุณค่ะ",
+        quotes: this.defaultAlignmentQuotes([]),
         nextSteps: [
           "ลองทำ quiz สักชุดเพื่อเริ่มเก็บ evidence",
           "ถาม AI Chat ในหัวข้อที่คุณสนใจ",
@@ -454,6 +476,7 @@ export class SkillRadarService {
         `เส้นทางสาย ${positionName} ของคุณกำลังไปได้ดี ` +
         `โดยมีจุดเด่นด้าน ${result.strengths.join(", ")} ` +
         "รักษาความต่อเนื่องและฝึกฝนอย่างสม่ำเสมอ คุณจะก้าวไปข้างหน้าได้อีกไกลเลยค่ะ",
+      quotes: this.defaultAlignmentQuotes(result.strengths),
       nextSteps: [
         "ต่อยอดจุดแข็งด้วยการทำ quiz เพิ่ม",
         "ลองเรียนหัวข้อใหม่เพื่อขยายทักษะ",
@@ -462,16 +485,23 @@ export class SkillRadarService {
     };
   }
 
-  private parseAlignmentReply(raw: string): { description: string; nextSteps: string[] } {
+  private parseAlignmentReply(raw: string): { description: string; quotes: string[]; nextSteps: string[] } {
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) throw new Error("AI response did not contain a JSON object");
 
-    const parsed = JSON.parse(match[0]) as { description?: unknown; nextSteps?: unknown };
+    const parsed = JSON.parse(match[0]) as { description?: unknown; quotes?: unknown; nextSteps?: unknown };
     const description =
       typeof parsed.description === "string"
         ? parsed.description.replace(/\s+/g, " ").trim().slice(0, CAREER_ALIGNMENT_MAX_DESCRIPTION_LENGTH)
         : "";
     if (description.length < 10) throw new Error("AI returned an empty alignment description");
+
+    const quotes = Array.isArray(parsed.quotes)
+      ? parsed.quotes
+          .filter((quote): quote is string => typeof quote === "string" && quote.trim().length > 0)
+          .map((quote) => quote.replace(/\s+/g, " ").trim().slice(0, CAREER_ALIGNMENT_MAX_QUOTE_LENGTH))
+          .slice(0, CAREER_ALIGNMENT_MAX_QUOTES)
+      : [];
 
     const nextSteps = Array.isArray(parsed.nextSteps)
       ? parsed.nextSteps
@@ -480,13 +510,13 @@ export class SkillRadarService {
           .slice(0, CAREER_ALIGNMENT_MAX_NEXT_STEPS)
       : [];
 
-    return { description, nextSteps };
+    return { description, quotes, nextSteps };
   }
 
   private async buildAlignmentContent(
     positionName: string,
     result: CareerAlignmentResult,
-  ): Promise<{ description: string; nextSteps: string[]; generatedBy: "ai" | "fallback" }> {
+  ): Promise<{ description: string; quotes: string[]; nextSteps: string[]; generatedBy: "ai" | "fallback" }> {
     const fallback = this.buildAlignmentFallback(positionName, result);
 
     // No evidence yet -> nothing for the AI to work with, use the template directly.
@@ -511,9 +541,10 @@ export class SkillRadarService {
       );
 
       const parsed = this.parseAlignmentReply(reply);
+      const quotes = parsed.quotes.length > 0 ? parsed.quotes : fallback.quotes;
       // AI may legitimately omit nextSteps; keep the template ones so the card is complete.
       const nextSteps = parsed.nextSteps.length > 0 ? parsed.nextSteps : fallback.nextSteps;
-      return { description: parsed.description, nextSteps, generatedBy: "ai" };
+      return { description: parsed.description, quotes, nextSteps, generatedBy: "ai" };
     } catch (error) {
       this.logger.warn(`AI ล่ม: career alignment content unavailable, using template: ${error}`);
       return { ...fallback, generatedBy: "fallback" };

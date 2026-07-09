@@ -405,6 +405,7 @@ describe("SkillRadarService.getCareerAlignment", () => {
     ]);
     const aiJson = JSON.stringify({
       description: "เส้นทางสาย Software Engineer ของคุณไปได้สวยเลยค่ะ",
+      quotes: ["เริ่มวันนี้ เก่งขึ้นได้ทุกวัน", "ก้าวเล็ก ๆ วันนี้ คือฐานของวันพรุ่งนี้"],
       nextSteps: ["ทำ quiz เพิ่ม", "เรียนหัวข้อใหม่"],
     });
     return { service, prisma, aiService, aiJson };
@@ -421,6 +422,7 @@ describe("SkillRadarService.getCareerAlignment", () => {
     expect(result.level).toBe("Junior Strong");
     expect(result.strengths).toEqual(["FrontEnd", "BackEnd"]);
     expect(result.description).toContain("Software Engineer");
+    expect(result.quotes).toEqual(["เริ่มวันนี้ เก่งขึ้นได้ทุกวัน", "ก้าวเล็ก ๆ วันนี้ คือฐานของวันพรุ่งนี้"]);
     expect(result.nextSteps).toEqual(["ทำ quiz เพิ่ม", "เรียนหัวข้อใหม่"]);
     expect(result.generatedBy).toBe("ai");
     // Persisted with the skill-score hash + snapshot for later cache checks.
@@ -428,8 +430,10 @@ describe("SkillRadarService.getCareerAlignment", () => {
     expect(upsertArg.where).toEqual({ userId_positionId: { userId: "user-1", positionId: "position-1" } });
     expect(upsertArg.create.skillScoreHash).toBe("s1:70|s2:60|s3:0");
     expect(upsertArg.create.scoreSumSnapshot).toBe(130);
+    expect(upsertArg.create.quotes).toEqual(["เริ่มวันนี้ เก่งขึ้นได้ทุกวัน", "ก้าวเล็ก ๆ วันนี้ คือฐานของวันพรุ่งนี้"]);
     expect(upsertArg.create.generatedBy).toBe("ai");
-    expect(aiService.chat.mock.calls[0][0][0].content).toContain("Use ONLY strengths, description, and nextSteps");
+    expect(aiService.chat.mock.calls[0][0][0].content).toContain("Use ONLY strengths, quotes, description, and nextSteps");
+    expect(aiService.chat.mock.calls[0][0][0].content).toContain("quotes: 2-4 short Thai motivational quotes");
     expect(aiService.chat.mock.calls[0][0][0].content).toContain("Do NOT output or imply weaknesses");
     expect(aiService.chat.mock.calls[0][0][0].content).toContain("NEVER make the learner feel judged");
   });
@@ -442,6 +446,7 @@ describe("SkillRadarService.getCareerAlignment", () => {
       alignmentScore: 56.33,
       strengths: ["FrontEnd", "BackEnd"],
       description: "cached description",
+      quotes: ["cached quote"],
       nextSteps: ["cached step"],
       generatedBy: "ai",
     });
@@ -451,6 +456,7 @@ describe("SkillRadarService.getCareerAlignment", () => {
     expect(aiService.chat).not.toHaveBeenCalled();
     expect(prisma.careerAlignment.upsert).not.toHaveBeenCalled();
     expect(result.description).toBe("cached description");
+    expect(result.quotes).toEqual(["cached quote"]);
     expect(result.nextSteps).toEqual(["cached step"]);
   });
 
@@ -463,6 +469,7 @@ describe("SkillRadarService.getCareerAlignment", () => {
       alignmentScore: 40,
       strengths: ["BackEnd"],
       description: "old cached description",
+      quotes: ["old quote"],
       nextSteps: [],
       generatedBy: "ai",
     });
@@ -473,6 +480,7 @@ describe("SkillRadarService.getCareerAlignment", () => {
     expect(prisma.careerAlignment.upsert).toHaveBeenCalledTimes(1);
     const upsertArg = prisma.careerAlignment.upsert.mock.calls[0][0];
     expect(upsertArg.update.skillScoreHash).toBe("s1:70|s2:60|s3:0");
+    expect(upsertArg.update.quotes).toEqual(["เริ่มวันนี้ เก่งขึ้นได้ทุกวัน", "ก้าวเล็ก ๆ วันนี้ คือฐานของวันพรุ่งนี้"]);
     expect(result.description).toContain("Software Engineer");
   });
 
@@ -486,6 +494,7 @@ describe("SkillRadarService.getCareerAlignment", () => {
     expect(result.generatedBy).toBe("fallback");
     expect(result.description).toContain("Software Engineer");
     expect(result.description).toContain("FrontEnd");
+    expect(result.quotes.length).toBeGreaterThan(0);
     expect(result.nextSteps.length).toBeGreaterThan(0);
     expect(prisma.careerAlignment.upsert.mock.calls[0][0].create.generatedBy).toBe("fallback");
   });
@@ -502,6 +511,7 @@ describe("SkillRadarService.getCareerAlignment", () => {
     expect(result.level).toBe("Getting Started");
     expect(result.strengths).toEqual([]);
     expect(result.generatedBy).toBe("fallback");
+    expect(result.quotes.length).toBeGreaterThan(0);
     expect(aiService.chat).not.toHaveBeenCalled();
     // Still cached so subsequent loads are cheap.
     expect(prisma.careerAlignment.upsert).toHaveBeenCalledTimes(1);

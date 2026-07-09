@@ -98,6 +98,7 @@ export interface CareerAlignment {
   alignmentScore: number;
   strengths: string[];
   description: string;
+  quotes: string[];
   nextSteps: string[];
   /** "ai" when the description came from the AI Center, "fallback" otherwise. */
   generatedBy: "ai" | "fallback";
