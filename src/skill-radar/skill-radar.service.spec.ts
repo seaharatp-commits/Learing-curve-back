@@ -387,3 +387,59 @@ describe("SkillRadarService Phase 7 lesson behavior scoring", () => {
     expect(prisma.skillScoreEvent.create).not.toHaveBeenCalled();
   });
 });
+
+describe("SkillRadarService.getCareerReadinessBenchmark", () => {
+  function benchmarkService() {
+    const { service, prisma, aiService } = makeService();
+    // Position resolves to "Software Engineer" via user.preferredPosition (default mock).
+    prisma.position.findUnique.mockResolvedValue({ id: "position-1", name: "Software Engineer", isActive: true });
+    // getUserRadar reads positionSkill.findMany with userSkillScores included.
+    prisma.positionSkill.findMany.mockResolvedValue([
+      { id: "s1", name: "FrontEnd", description: null, userSkillScores: [{ score: 70, evidenceCount: 5 }] },
+      { id: "s2", name: "BackEnd", description: null, userSkillScores: [{ score: 60, evidenceCount: 4 }] },
+      { id: "s3", name: "DevOps", description: null, userSkillScores: [] },
+    ]);
+    return { service, prisma, aiService };
+  }
+
+  it("computes level/strengths deterministically and uses the AI description when available", async () => {
+    const { service, aiService } = benchmarkService();
+    aiService.chat.mockResolvedValue("คุณมีความพร้อมระดับดีในสาย Software Engineer ค่ะ");
+
+    const result = await service.getCareerReadinessBenchmark("user-1");
+
+    expect(result.position).toBe("Software Engineer");
+    // avg(70,60)=65, breadth 2/3=0.667 -> 65*(0.6+0.4*0.667)=65*0.867=56.3 -> Junior Strong
+    expect(result.level).toBe("Junior Strong");
+    expect(result.strengths).toEqual(["FrontEnd", "BackEnd"]);
+    expect(result.description).toContain("Software Engineer");
+    expect(result.aiGenerated).toBe(true);
+  });
+
+  it("falls back to a template description when the AI Center fails", async () => {
+    const { service, aiService } = benchmarkService();
+    aiService.chat.mockRejectedValue(new Error("AI down"));
+
+    const result = await service.getCareerReadinessBenchmark("user-1");
+
+    expect(result.level).toBe("Junior Strong");
+    expect(result.aiGenerated).toBe(false);
+    expect(result.description).toContain("Junior Strong");
+    expect(result.description).toContain("FrontEnd");
+  });
+
+  it("returns Getting Started and does not call the AI when there is no evidence yet", async () => {
+    const { service, prisma, aiService } = benchmarkService();
+    prisma.positionSkill.findMany.mockResolvedValue([
+      { id: "s1", name: "FrontEnd", description: null, userSkillScores: [] },
+      { id: "s2", name: "BackEnd", description: null, userSkillScores: [{ score: 0, evidenceCount: 0 }] },
+    ]);
+
+    const result = await service.getCareerReadinessBenchmark("user-1");
+
+    expect(result.level).toBe("Getting Started");
+    expect(result.strengths).toEqual([]);
+    expect(result.aiGenerated).toBe(false);
+    expect(aiService.chat).not.toHaveBeenCalled();
+  });
+});

@@ -9,7 +9,12 @@ import {
   type ScoreCalculationResult,
   type SkillScoreState,
 } from "./skill-score-calculator";
+import {
+  calculateCareerReadiness,
+  type CareerReadinessResult,
+} from "./career-readiness-calculator";
 import type {
+  CareerReadinessBenchmark,
   PersistSkillScoreResultInput,
   PositionSkillSuggestion,
   RecordLessonCompletionSkillSignalsInput,
@@ -57,6 +62,16 @@ const MIN_INTEREST_SKILL_CONFIDENCE = 0.45;
 const INTEREST_HIGH_STRENGTH_THRESHOLD = 0.75;
 const INTEREST_HIGH_SCORE = 1;
 const INTEREST_LOW_SCORE = 0.5;
+const CAREER_BENCHMARK_AI_OPTIONS = { temperature: 0.6, maxTokens: 320 };
+const CAREER_BENCHMARK_MAX_DESCRIPTION_LENGTH = 400;
+const CAREER_BENCHMARK_SYSTEM_PROMPT = [
+  "You write a short, encouraging career-readiness summary in Thai for a learner on a learning platform.",
+  "You are given the learner's position, a computed readiness level, and their strongest skills.",
+  "Write 2-3 sentences of plain Thai text (no markdown, no JSON, no headings).",
+  "Mention the readiness level and the strengths naturally, and encourage the learner to keep going to reach the next level.",
+  "Do NOT invent skills, numbers, or facts that were not provided. Do NOT restate raw numbers like percentages.",
+  "Keep a warm, supportive tone. Use polite feminine Thai ending with 'ค่ะ' where natural.",
+].join("\n");
 
 interface AdminSkillScoreEventQuery {
   limit?: number;
@@ -321,6 +336,83 @@ export class SkillRadarService {
       data: { preferredPositionId: position.id },
     });
     return this.getUserRadar(userId, position.id);
+  }
+
+  /**
+   * Career Readiness Benchmark for the "AI Powered" dashboard card.
+   *
+   * The LEVEL and strengths are computed deterministically by the backend from
+   * the learner's real Skill Radar (calculateCareerReadiness) — AI never decides
+   * the level. AI is only used to phrase the human-friendly description; if it is
+   * unavailable, a deterministic template description is used instead so the card
+   * never breaks.
+   */
+  async getCareerReadinessBenchmark(userId: string): Promise<CareerReadinessBenchmark> {
+    const radar = await this.getUserRadar(userId);
+    const result = calculateCareerReadiness(radar.skills, radar.skills.length);
+    const { description, aiGenerated } = await this.buildReadinessDescription(radar.position.name, result);
+
+    return {
+      position: radar.position.name,
+      level: result.level,
+      readinessScore: result.readinessScore,
+      strengths: result.strengths,
+      description,
+      aiGenerated,
+    };
+  }
+
+  private buildReadinessFallbackDescription(positionName: string, result: CareerReadinessResult): string {
+    if (result.strengths.length === 0) {
+      return "เริ่มทำ quiz หรือถาม AI Chat เพื่อสะสม evidence แล้วระบบจะช่วยประเมินระดับความพร้อมของคุณค่ะ";
+    }
+    return (
+      `ระดับความพร้อมของคุณสำหรับสาย ${positionName} อยู่ที่ ${result.level} ` +
+      `โดยมีจุดเด่นด้าน ${result.strengths.join(", ")} ` +
+      "รักษาความต่อเนื่องและฝึกฝนอย่างสม่ำเสมอ จะช่วยให้คุณก้าวสู่ระดับถัดไปได้เร็วขึ้นค่ะ"
+    );
+  }
+
+  private async buildReadinessDescription(
+    positionName: string,
+    result: CareerReadinessResult,
+  ): Promise<{ description: string; aiGenerated: boolean }> {
+    const fallback = this.buildReadinessFallbackDescription(positionName, result);
+
+    // No evidence yet -> nothing for the AI to work with, use the template directly.
+    if (result.strengths.length === 0) {
+      return { description: fallback, aiGenerated: false };
+    }
+
+    try {
+      const reply = await this.aiService.chat(
+        [
+          { role: "system", content: CAREER_BENCHMARK_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: JSON.stringify({
+              position: positionName,
+              level: result.level,
+              strengths: result.strengths,
+            }),
+          },
+        ],
+        CAREER_BENCHMARK_AI_OPTIONS,
+      );
+
+      const cleaned = reply
+        .replace(/```(?:json|markdown|md)?/gi, "")
+        .replace(/```/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, CAREER_BENCHMARK_MAX_DESCRIPTION_LENGTH);
+
+      if (cleaned.length < 10) throw new Error("AI returned an empty readiness description");
+      return { description: cleaned, aiGenerated: true };
+    } catch (error) {
+      this.logger.warn(`AI ล่ม: career readiness description unavailable, using template: ${error}`);
+      return { description: fallback, aiGenerated: false };
+    }
   }
 
   async listSkillNamesForUser(userId: string): Promise<string[]> {

@@ -91,3 +91,13 @@ export interface RecordLessonCompletionSkillSignalsInput {
   lessonContent?: string;
   lessonText?: string;
 }
+
+export interface CareerReadinessBenchmark {
+  position: string;
+  level: string;
+  readinessScore: number;
+  strengths: string[];
+  description: string;
+  /** true when the description came from the AI Center, false when it fell back to a template. */
+  aiGenerated: boolean;
+}
