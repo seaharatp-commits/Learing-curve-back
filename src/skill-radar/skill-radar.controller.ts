@@ -35,9 +35,9 @@ export class SkillRadarController {
     return this.skillRadarService.updateMyPosition(user.id, dto);
   }
 
-  @Get("me/career-benchmark")
-  getMyCareerBenchmark(@CurrentUser() user: RequestUser) {
-    return this.skillRadarService.getCareerReadinessBenchmark(user.id);
+  @Get("me/career-alignment")
+  getMyCareerAlignment(@CurrentUser() user: RequestUser) {
+    return this.skillRadarService.getCareerAlignment(user.id);
   }
 
   @Roles("ADMIN")

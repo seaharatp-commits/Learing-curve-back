@@ -10,11 +10,11 @@ import {
   type SkillScoreState,
 } from "./skill-score-calculator";
 import {
-  calculateCareerReadiness,
-  type CareerReadinessResult,
-} from "./career-readiness-calculator";
+  calculateCareerAlignment,
+  type CareerAlignmentResult,
+} from "./career-alignment-calculator";
 import type {
-  CareerReadinessBenchmark,
+  CareerAlignment,
   PersistSkillScoreResultInput,
   PositionSkillSuggestion,
   RecordLessonCompletionSkillSignalsInput,
@@ -62,15 +62,19 @@ const MIN_INTEREST_SKILL_CONFIDENCE = 0.45;
 const INTEREST_HIGH_STRENGTH_THRESHOLD = 0.75;
 const INTEREST_HIGH_SCORE = 1;
 const INTEREST_LOW_SCORE = 0.5;
-const CAREER_BENCHMARK_AI_OPTIONS = { temperature: 0.6, maxTokens: 320 };
-const CAREER_BENCHMARK_MAX_DESCRIPTION_LENGTH = 400;
-const CAREER_BENCHMARK_SYSTEM_PROMPT = [
-  "You write a short, encouraging career-readiness summary in Thai for a learner on a learning platform.",
-  "You are given the learner's position, a computed readiness level, and their strongest skills.",
-  "Write 2-3 sentences of plain Thai text (no markdown, no JSON, no headings).",
-  "Mention the readiness level and the strengths naturally, and encourage the learner to keep going to reach the next level.",
-  "Do NOT invent skills, numbers, or facts that were not provided. Do NOT restate raw numbers like percentages.",
-  "Keep a warm, supportive tone. Use polite feminine Thai ending with 'ค่ะ' where natural.",
+const CAREER_ALIGNMENT_AI_OPTIONS = { temperature: 0.6, maxTokens: 500 };
+const CAREER_ALIGNMENT_MAX_DESCRIPTION_LENGTH = 400;
+const CAREER_ALIGNMENT_MAX_NEXT_STEP_LENGTH = 120;
+const CAREER_ALIGNMENT_MAX_NEXT_STEPS = 4;
+const CAREER_ALIGNMENT_SYSTEM_PROMPT = [
+  "You write encouraging Career Alignment content in Thai for a learner on a learning platform.",
+  "You are given the learner's position, a computed alignment level, and their strongest skills.",
+  "Return STRICT JSON only (no markdown, no code fences), shaped exactly as:",
+  '{ "description": string, "nextSteps": string[] }',
+  "description: 2-3 sentences of plain Thai that mention the strengths naturally and encourage the learner to keep going.",
+  "nextSteps: 2-4 short, concrete, positively-framed Thai action items the learner can do next (e.g. ทำ quiz เพิ่ม, เรียนหัวข้อใหม่).",
+  "TONE RULES: Always positive and supportive. NEVER make the learner feel judged, criticized, behind, or 'not good enough'. Frame everything as growth and momentum, not as weaknesses or gaps.",
+  "Do NOT invent skills, numbers, or facts that were not provided. Do NOT restate raw numbers like percentages. Use polite feminine Thai ending with 'ค่ะ' where natural.",
 ].join("\n");
 
 interface AdminSkillScoreEventQuery {
@@ -339,55 +343,160 @@ export class SkillRadarService {
   }
 
   /**
-   * Career Readiness Benchmark for the "AI Powered" dashboard card.
+   * Career Alignment for the "AI Powered" dashboard card.
    *
    * The LEVEL and strengths are computed deterministically by the backend from
-   * the learner's real Skill Radar (calculateCareerReadiness) — AI never decides
-   * the level. AI is only used to phrase the human-friendly description; if it is
-   * unavailable, a deterministic template description is used instead so the card
-   * never breaks.
+   * the learner's real Skill Radar (calculateCareerAlignment) — AI never decides
+   * the level. AI phrases the description + nextSteps; if it is unavailable a
+   * deterministic template is used so the card never breaks.
+   *
+   * Result is CACHED per (userId, positionId) keyed on skillScoreHash. AI is only
+   * called when the learner's skill scores actually change — a plain dashboard
+   * refresh with unchanged scores returns the cached row without any AI call.
    */
-  async getCareerReadinessBenchmark(userId: string): Promise<CareerReadinessBenchmark> {
+  async getCareerAlignment(userId: string): Promise<CareerAlignment> {
     const radar = await this.getUserRadar(userId);
-    const result = calculateCareerReadiness(radar.skills, radar.skills.length);
-    const { description, aiGenerated } = await this.buildReadinessDescription(radar.position.name, result);
+    const positionId = radar.position.id;
+    const { scoreSumSnapshot, skillScoreHash } = this.buildSkillScoreSnapshot(radar.skills);
 
-    return {
-      position: radar.position.name,
+    const existing = await this.prisma.careerAlignment.findUnique({
+      where: { userId_positionId: { userId, positionId } },
+    });
+
+    // Cache hit: skill scores unchanged since last generation -> no AI call.
+    if (existing && existing.skillScoreHash === skillScoreHash) {
+      return this.toCareerAlignmentResponse(radar.position.name, existing);
+    }
+
+    // First time, or scores changed -> recompute + (re)generate content, then upsert.
+    const result = calculateCareerAlignment(radar.skills, radar.skills.length);
+    const content = await this.buildAlignmentContent(radar.position.name, result);
+
+    const data = {
+      scoreSumSnapshot,
+      skillScoreHash,
+      alignmentScore: result.alignmentScore,
       level: result.level,
-      readinessScore: result.readinessScore,
+      description: content.description,
       strengths: result.strengths,
-      description,
-      aiGenerated,
+      nextSteps: content.nextSteps,
+      generatedBy: content.generatedBy,
+    };
+
+    const saved = await this.prisma.careerAlignment.upsert({
+      where: { userId_positionId: { userId, positionId } },
+      update: data,
+      create: { userId, positionId, ...data },
+    });
+
+    return this.toCareerAlignmentResponse(radar.position.name, saved);
+  }
+
+  /**
+   * scoreSumSnapshot = sum of scores (reference/debug only).
+   * skillScoreHash   = the real cache key: "skillId:score|skillId:score|...",
+   *   sorted by skillId so it is stable regardless of query order. Uses per-skill
+   *   scores so that the hash still changes when individual skills move even if
+   *   the total sum happens to stay the same.
+   */
+  private buildSkillScoreSnapshot(skills: Array<{ id: string; score: number }>): {
+    scoreSumSnapshot: number;
+    skillScoreHash: string;
+  } {
+    const scoreSumSnapshot = skills.reduce((sum, skill) => sum + skill.score, 0);
+    const skillScoreHash = [...skills]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((skill) => `${skill.id}:${skill.score}`)
+      .join("|");
+    return { scoreSumSnapshot, skillScoreHash };
+  }
+
+  private toCareerAlignmentResponse(
+    positionName: string,
+    row: {
+      level: string;
+      alignmentScore: number;
+      strengths: string[];
+      description: string;
+      nextSteps: string[];
+      generatedBy: string;
+    },
+  ): CareerAlignment {
+    return {
+      position: positionName,
+      level: row.level,
+      alignmentScore: row.alignmentScore,
+      strengths: row.strengths,
+      description: row.description,
+      nextSteps: row.nextSteps,
+      generatedBy: row.generatedBy === "ai" ? "ai" : "fallback",
     };
   }
 
-  private buildReadinessFallbackDescription(positionName: string, result: CareerReadinessResult): string {
+  private buildAlignmentFallback(
+    positionName: string,
+    result: CareerAlignmentResult,
+  ): { description: string; nextSteps: string[] } {
     if (result.strengths.length === 0) {
-      return "เริ่มทำ quiz หรือถาม AI Chat เพื่อสะสม evidence แล้วระบบจะช่วยประเมินระดับความพร้อมของคุณค่ะ";
+      return {
+        description:
+          "เริ่มต้นเก็บ evidence ด้วยการทำ quiz หรือถาม AI Chat แล้วระบบจะช่วยประเมินความสอดคล้องกับสายงานของคุณค่ะ",
+        nextSteps: [
+          "ลองทำ quiz สักชุดเพื่อเริ่มเก็บ evidence",
+          "ถาม AI Chat ในหัวข้อที่คุณสนใจ",
+          "เรียนบทเรียนใหม่สัก 1 บท",
+        ],
+      };
     }
-    return (
-      `ระดับความพร้อมของคุณสำหรับสาย ${positionName} อยู่ที่ ${result.level} ` +
-      `โดยมีจุดเด่นด้าน ${result.strengths.join(", ")} ` +
-      "รักษาความต่อเนื่องและฝึกฝนอย่างสม่ำเสมอ จะช่วยให้คุณก้าวสู่ระดับถัดไปได้เร็วขึ้นค่ะ"
-    );
+    return {
+      description:
+        `เส้นทางสาย ${positionName} ของคุณกำลังไปได้ดี ` +
+        `โดยมีจุดเด่นด้าน ${result.strengths.join(", ")} ` +
+        "รักษาความต่อเนื่องและฝึกฝนอย่างสม่ำเสมอ คุณจะก้าวไปข้างหน้าได้อีกไกลเลยค่ะ",
+      nextSteps: [
+        "ต่อยอดจุดแข็งด้วยการทำ quiz เพิ่ม",
+        "ลองเรียนหัวข้อใหม่เพื่อขยายทักษะ",
+        "ถาม AI Chat เพื่อเก็บ evidence เพิ่ม",
+      ],
+    };
   }
 
-  private async buildReadinessDescription(
+  private parseAlignmentReply(raw: string): { description: string; nextSteps: string[] } {
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error("AI response did not contain a JSON object");
+
+    const parsed = JSON.parse(match[0]) as { description?: unknown; nextSteps?: unknown };
+    const description =
+      typeof parsed.description === "string"
+        ? parsed.description.replace(/\s+/g, " ").trim().slice(0, CAREER_ALIGNMENT_MAX_DESCRIPTION_LENGTH)
+        : "";
+    if (description.length < 10) throw new Error("AI returned an empty alignment description");
+
+    const nextSteps = Array.isArray(parsed.nextSteps)
+      ? parsed.nextSteps
+          .filter((step): step is string => typeof step === "string" && step.trim().length > 0)
+          .map((step) => step.replace(/\s+/g, " ").trim().slice(0, CAREER_ALIGNMENT_MAX_NEXT_STEP_LENGTH))
+          .slice(0, CAREER_ALIGNMENT_MAX_NEXT_STEPS)
+      : [];
+
+    return { description, nextSteps };
+  }
+
+  private async buildAlignmentContent(
     positionName: string,
-    result: CareerReadinessResult,
-  ): Promise<{ description: string; aiGenerated: boolean }> {
-    const fallback = this.buildReadinessFallbackDescription(positionName, result);
+    result: CareerAlignmentResult,
+  ): Promise<{ description: string; nextSteps: string[]; generatedBy: "ai" | "fallback" }> {
+    const fallback = this.buildAlignmentFallback(positionName, result);
 
     // No evidence yet -> nothing for the AI to work with, use the template directly.
     if (result.strengths.length === 0) {
-      return { description: fallback, aiGenerated: false };
+      return { ...fallback, generatedBy: "fallback" };
     }
 
     try {
       const reply = await this.aiService.chat(
         [
-          { role: "system", content: CAREER_BENCHMARK_SYSTEM_PROMPT },
+          { role: "system", content: CAREER_ALIGNMENT_SYSTEM_PROMPT },
           {
             role: "user",
             content: JSON.stringify({
@@ -397,21 +506,16 @@ export class SkillRadarService {
             }),
           },
         ],
-        CAREER_BENCHMARK_AI_OPTIONS,
+        CAREER_ALIGNMENT_AI_OPTIONS,
       );
 
-      const cleaned = reply
-        .replace(/```(?:json|markdown|md)?/gi, "")
-        .replace(/```/g, "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, CAREER_BENCHMARK_MAX_DESCRIPTION_LENGTH);
-
-      if (cleaned.length < 10) throw new Error("AI returned an empty readiness description");
-      return { description: cleaned, aiGenerated: true };
+      const parsed = this.parseAlignmentReply(reply);
+      // AI may legitimately omit nextSteps; keep the template ones so the card is complete.
+      const nextSteps = parsed.nextSteps.length > 0 ? parsed.nextSteps : fallback.nextSteps;
+      return { description: parsed.description, nextSteps, generatedBy: "ai" };
     } catch (error) {
-      this.logger.warn(`AI ล่ม: career readiness description unavailable, using template: ${error}`);
-      return { description: fallback, aiGenerated: false };
+      this.logger.warn(`AI ล่ม: career alignment content unavailable, using template: ${error}`);
+      return { ...fallback, generatedBy: "fallback" };
     }
   }
 

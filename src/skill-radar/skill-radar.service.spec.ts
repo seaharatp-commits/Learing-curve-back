@@ -60,6 +60,10 @@ function makeService() {
     question: {
       findUnique: jest.fn(),
     },
+    careerAlignment: {
+      findUnique: jest.fn().mockResolvedValue(null),
+      upsert: jest.fn((args) => Promise.resolve({ id: "ca-1", ...args.create, ...args.update })),
+    },
     $transaction: jest.fn().mockResolvedValue([{ id: "score-1" }, { id: "event-1" }]),
   };
   const aiService = { chat: jest.fn() };
@@ -388,58 +392,115 @@ describe("SkillRadarService Phase 7 lesson behavior scoring", () => {
   });
 });
 
-describe("SkillRadarService.getCareerReadinessBenchmark", () => {
-  function benchmarkService() {
+describe("SkillRadarService.getCareerAlignment", () => {
+  function alignmentService() {
     const { service, prisma, aiService } = makeService();
-    // Position resolves to "Software Engineer" via user.preferredPosition (default mock).
     prisma.position.findUnique.mockResolvedValue({ id: "position-1", name: "Software Engineer", isActive: true });
     // getUserRadar reads positionSkill.findMany with userSkillScores included.
+    // getUserRadar rounds scores, so radar skills are s1:70, s2:60, s3:0.
     prisma.positionSkill.findMany.mockResolvedValue([
       { id: "s1", name: "FrontEnd", description: null, userSkillScores: [{ score: 70, evidenceCount: 5 }] },
       { id: "s2", name: "BackEnd", description: null, userSkillScores: [{ score: 60, evidenceCount: 4 }] },
       { id: "s3", name: "DevOps", description: null, userSkillScores: [] },
     ]);
-    return { service, prisma, aiService };
+    const aiJson = JSON.stringify({
+      description: "เส้นทางสาย Software Engineer ของคุณไปได้สวยเลยค่ะ",
+      nextSteps: ["ทำ quiz เพิ่ม", "เรียนหัวข้อใหม่"],
+    });
+    return { service, prisma, aiService, aiJson };
   }
 
-  it("computes level/strengths deterministically and uses the AI description when available", async () => {
-    const { service, aiService } = benchmarkService();
-    aiService.chat.mockResolvedValue("คุณมีความพร้อมระดับดีในสาย Software Engineer ค่ะ");
+  it("computes level/strengths deterministically and generates+caches content on first load", async () => {
+    const { service, prisma, aiService, aiJson } = alignmentService();
+    aiService.chat.mockResolvedValue(aiJson);
 
-    const result = await service.getCareerReadinessBenchmark("user-1");
+    const result = await service.getCareerAlignment("user-1");
 
     expect(result.position).toBe("Software Engineer");
-    // avg(70,60)=65, breadth 2/3=0.667 -> 65*(0.6+0.4*0.667)=65*0.867=56.3 -> Junior Strong
+    // avg(70,60)=65, breadth 2/3=0.667 -> 65*(0.6+0.4*0.667)=56.33 -> Junior Strong
     expect(result.level).toBe("Junior Strong");
     expect(result.strengths).toEqual(["FrontEnd", "BackEnd"]);
     expect(result.description).toContain("Software Engineer");
-    expect(result.aiGenerated).toBe(true);
+    expect(result.nextSteps).toEqual(["ทำ quiz เพิ่ม", "เรียนหัวข้อใหม่"]);
+    expect(result.generatedBy).toBe("ai");
+    // Persisted with the skill-score hash + snapshot for later cache checks.
+    const upsertArg = prisma.careerAlignment.upsert.mock.calls[0][0];
+    expect(upsertArg.where).toEqual({ userId_positionId: { userId: "user-1", positionId: "position-1" } });
+    expect(upsertArg.create.skillScoreHash).toBe("s1:70|s2:60|s3:0");
+    expect(upsertArg.create.scoreSumSnapshot).toBe(130);
+    expect(upsertArg.create.generatedBy).toBe("ai");
   });
 
-  it("falls back to a template description when the AI Center fails", async () => {
-    const { service, aiService } = benchmarkService();
+  it("returns the cached row WITHOUT calling the AI when the skill-score hash is unchanged", async () => {
+    const { service, prisma, aiService } = alignmentService();
+    prisma.careerAlignment.findUnique.mockResolvedValue({
+      skillScoreHash: "s1:70|s2:60|s3:0", // matches current radar
+      level: "Junior Strong",
+      alignmentScore: 56.33,
+      strengths: ["FrontEnd", "BackEnd"],
+      description: "cached description",
+      nextSteps: ["cached step"],
+      generatedBy: "ai",
+    });
+
+    const result = await service.getCareerAlignment("user-1");
+
+    expect(aiService.chat).not.toHaveBeenCalled();
+    expect(prisma.careerAlignment.upsert).not.toHaveBeenCalled();
+    expect(result.description).toBe("cached description");
+    expect(result.nextSteps).toEqual(["cached step"]);
+  });
+
+  it("regenerates with the AI and updates the row when the skill-score hash changed", async () => {
+    const { service, prisma, aiService, aiJson } = alignmentService();
+    aiService.chat.mockResolvedValue(aiJson);
+    prisma.careerAlignment.findUnique.mockResolvedValue({
+      skillScoreHash: "s1:40|s2:60|s3:0", // stale — FrontEnd used to be 40
+      level: "Junior",
+      alignmentScore: 40,
+      strengths: ["BackEnd"],
+      description: "old cached description",
+      nextSteps: [],
+      generatedBy: "ai",
+    });
+
+    const result = await service.getCareerAlignment("user-1");
+
+    expect(aiService.chat).toHaveBeenCalledTimes(1);
+    expect(prisma.careerAlignment.upsert).toHaveBeenCalledTimes(1);
+    const upsertArg = prisma.careerAlignment.upsert.mock.calls[0][0];
+    expect(upsertArg.update.skillScoreHash).toBe("s1:70|s2:60|s3:0");
+    expect(result.description).toContain("Software Engineer");
+  });
+
+  it("saves fallback content with generatedBy 'fallback' when the AI Center fails", async () => {
+    const { service, prisma, aiService } = alignmentService();
     aiService.chat.mockRejectedValue(new Error("AI down"));
 
-    const result = await service.getCareerReadinessBenchmark("user-1");
+    const result = await service.getCareerAlignment("user-1");
 
     expect(result.level).toBe("Junior Strong");
-    expect(result.aiGenerated).toBe(false);
-    expect(result.description).toContain("Junior Strong");
+    expect(result.generatedBy).toBe("fallback");
+    expect(result.description).toContain("Software Engineer");
     expect(result.description).toContain("FrontEnd");
+    expect(result.nextSteps.length).toBeGreaterThan(0);
+    expect(prisma.careerAlignment.upsert.mock.calls[0][0].create.generatedBy).toBe("fallback");
   });
 
-  it("returns Getting Started and does not call the AI when there is no evidence yet", async () => {
-    const { service, prisma, aiService } = benchmarkService();
+  it("returns Getting Started with fallback and does not call the AI when there is no evidence yet", async () => {
+    const { service, prisma, aiService } = alignmentService();
     prisma.positionSkill.findMany.mockResolvedValue([
       { id: "s1", name: "FrontEnd", description: null, userSkillScores: [] },
       { id: "s2", name: "BackEnd", description: null, userSkillScores: [{ score: 0, evidenceCount: 0 }] },
     ]);
 
-    const result = await service.getCareerReadinessBenchmark("user-1");
+    const result = await service.getCareerAlignment("user-1");
 
     expect(result.level).toBe("Getting Started");
     expect(result.strengths).toEqual([]);
-    expect(result.aiGenerated).toBe(false);
+    expect(result.generatedBy).toBe("fallback");
     expect(aiService.chat).not.toHaveBeenCalled();
+    // Still cached so subsequent loads are cheap.
+    expect(prisma.careerAlignment.upsert).toHaveBeenCalledTimes(1);
   });
 });

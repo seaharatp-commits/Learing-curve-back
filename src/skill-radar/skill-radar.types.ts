@@ -92,12 +92,13 @@ export interface RecordLessonCompletionSkillSignalsInput {
   lessonText?: string;
 }
 
-export interface CareerReadinessBenchmark {
+export interface CareerAlignment {
   position: string;
   level: string;
-  readinessScore: number;
+  alignmentScore: number;
   strengths: string[];
   description: string;
-  /** true when the description came from the AI Center, false when it fell back to a template. */
-  aiGenerated: boolean;
+  nextSteps: string[];
+  /** "ai" when the description came from the AI Center, "fallback" otherwise. */
+  generatedBy: "ai" | "fallback";
 }

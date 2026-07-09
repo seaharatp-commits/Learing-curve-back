@@ -35,6 +35,7 @@ model User {
   createdQuizzes  Quiz[] @relation("QuizCreator")
   skillScores      UserSkillScore[]
   skillScoreEvents SkillScoreEvent[]
+  careerAlignments CareerAlignment[]
   preferredPosition Position? @relation("PreferredUserPosition", fields: [preferredPositionId], references: [id], onDelete: SetNull)
 
   @@index([preferredPositionId])
@@ -212,6 +213,7 @@ model Position {
   skills           PositionSkill[]
   userSkillScores  UserSkillScore[]
   skillScoreEvents SkillScoreEvent[]
+  careerAlignments CareerAlignment[]
   preferredByUsers User[] @relation("PreferredUserPosition")
 
   @@map("positions")
@@ -285,6 +287,34 @@ model SkillScoreEvent {
   @@index([userId, createdAt])
   @@index([skillId])
   @@map("skill_score_events")
+}
+
+// Cached AI-generated Career Alignment card content, keyed per user+position.
+// Regenerated only when skillScoreHash changes (i.e. the user's skill scores
+// actually moved), so the dashboard does not call the AI on every refresh.
+model CareerAlignment {
+  id               String   @id @default(uuid())
+  userId           String
+  positionId       String
+  /// sum(user_skill_scores.score) for the position — reference/debugging only.
+  scoreSumSnapshot Float    @default(0)
+  /// "skillId:score|skillId:score|..." — the cache-invalidation key.
+  skillScoreHash   String
+  alignmentScore   Float    @default(0)
+  level            String
+  description      String
+  strengths        String[] @default([])
+  nextSteps        String[] @default([])
+  /// "ai" when the description came from the AI Center, "fallback" otherwise.
+  generatedBy      String   @default("fallback")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  position Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, positionId])
+  @@map("career_alignment")
 }
 
 model QuizQuestionSkill {
