@@ -74,7 +74,7 @@ const CAREER_ALIGNMENT_SYSTEM_PROMPT = [
   "Return STRICT JSON only (no markdown, no code fences), shaped exactly as:",
   '{ "description": string, "quotes": string[], "nextSteps": string[] }',
   "Use ONLY strengths, quotes, description, and nextSteps. Do NOT output or imply weaknesses, weak points, gaps, risk scores, or judgment labels.",
-  "quotes: 2-4 short Thai motivational quotes for this learner. Every quote must clearly connect to Career Alignment or mention at least one provided strongest skill by name. Each quote should be warm, positive, non-judgmental, and suitable to rotate on the dashboard every 2.2 seconds.",
+  "quotes: 3-4 short Thai motivational quotes for this learner. Every quote must clearly connect to Career Alignment or mention at least one provided strongest skill by name. Each quote should be warm, positive, non-judgmental, and suitable to rotate on the dashboard every 2.5 seconds.",
   "description: 2-3 sentences of plain Thai that mention the strengths naturally and encourage the learner to keep going.",
   "nextSteps: 2-4 short, concrete, positively-framed Thai action items the learner can do next (e.g. ทำ quiz เพิ่ม, เรียนหัวข้อใหม่).",
   "TONE RULES: Always positive and supportive. NEVER make the learner feel judged, criticized, behind, or 'not good enough'. Frame everything as growth and momentum, not as weaknesses or gaps.",

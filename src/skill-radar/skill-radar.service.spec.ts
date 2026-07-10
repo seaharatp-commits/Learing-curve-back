@@ -433,7 +433,7 @@ describe("SkillRadarService.getCareerAlignment", () => {
     expect(upsertArg.create.quotes).toEqual(["เริ่มวันนี้ เก่งขึ้นได้ทุกวัน", "ก้าวเล็ก ๆ วันนี้ คือฐานของวันพรุ่งนี้"]);
     expect(upsertArg.create.generatedBy).toBe("ai");
     expect(aiService.chat.mock.calls[0][0][0].content).toContain("Use ONLY strengths, quotes, description, and nextSteps");
-    expect(aiService.chat.mock.calls[0][0][0].content).toContain("quotes: 2-4 short Thai motivational quotes");
+    expect(aiService.chat.mock.calls[0][0][0].content).toContain("quotes: 3-4 short Thai motivational quotes");
     expect(aiService.chat.mock.calls[0][0][0].content).toContain("Do NOT output or imply weaknesses");
     expect(aiService.chat.mock.calls[0][0][0].content).toContain("NEVER make the learner feel judged");
   });
