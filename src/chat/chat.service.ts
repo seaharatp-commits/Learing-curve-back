@@ -9,6 +9,7 @@ import type {
   QuestionAnalysisResult,
 } from "../ai/ai-question-understanding.types";
 import { RecommendationService } from "../knowledge-base/recommendation.service";
+import { buildFingerprint, jaccardScore, sharedTokens } from "../knowledge-base/text-similarity.util";
 import { SkillRadarService } from "../skill-radar/skill-radar.service";
 import { SendMessageDto } from "./dto/send-message.dto";
 import { sanitizeReply } from "./sanitize-reply.util";
@@ -121,6 +122,16 @@ interface ChatRecommendationFlowResult {
   analysis: QuestionAnalysisResult | null;
   recommendations: KnowledgeBaseRecommendation[];
   recommendedKnowledgeBases: ChatRecommendedKnowledgeBase[];
+}
+
+interface SelectedKnowledgeArticle {
+  id: string;
+  title: string;
+  content: string;
+  summary?: string | null;
+  resolution?: string | null;
+  keywords?: string[];
+  tags?: string[];
 }
 
 @Injectable()
@@ -240,18 +251,46 @@ export class ChatService {
     }
   }
 
-  private async recomputeSourceConfidence(content: string, articleId: string): Promise<number | null> {
+  private computeSelectedKnowledgeConfidence(content: string, article: SelectedKnowledgeArticle): number {
+    const queryFingerprint = buildFingerprint([content]);
+    if (queryFingerprint.size === 0) return 0.1;
+
+    const keywords = Array.isArray(article.keywords) ? article.keywords : [];
+    const tags = Array.isArray(article.tags) ? article.tags : [];
+    const titleFingerprint = buildFingerprint([article.title]);
+    const keywordFingerprint = buildFingerprint(keywords);
+    const tagFingerprint = buildFingerprint(tags);
+    const summaryFingerprint = buildFingerprint([article.summary ?? ""]);
+    const contentFingerprint = buildFingerprint([article.content, article.resolution ?? ""]);
+
+    const coverage = (target: Set<string>) =>
+      target.size === 0 ? 0 : sharedTokens(queryFingerprint, target).length / queryFingerprint.size;
+
+    const score =
+      coverage(titleFingerprint) * 0.36 +
+      coverage(keywordFingerprint) * 0.25 +
+      coverage(tagFingerprint) * 0.18 +
+      coverage(summaryFingerprint) * 0.13 +
+      jaccardScore(queryFingerprint, contentFingerprint) * 0.08;
+
+    return Math.round(Math.max(0.1, Math.min(1, score)) * 100) / 100;
+  }
+
+  private async recomputeSourceConfidence(content: string, article: SelectedKnowledgeArticle): Promise<number> {
     try {
       const recommendations = await this.recommendationService.recommend({
         title: content,
         description: content,
       });
-      const selectedArticle = recommendations.find((recommendation) => recommendation.articleId === articleId);
-      return selectedArticle?.confidenceScore ?? null;
+      const selectedArticle = recommendations.find((recommendation) => recommendation.articleId === article.id);
+      if (selectedArticle?.confidenceScore !== null && selectedArticle?.confidenceScore !== undefined) {
+        return Math.round(Math.max(0.1, Math.min(1, selectedArticle.confidenceScore)) * 100) / 100;
+      }
     } catch (error) {
       this.logger.warn(`Failed to recompute KB source confidence: ${error}`);
-      return null;
     }
+
+    return this.computeSelectedKnowledgeConfidence(content, article);
   }
 
   private async recordSkillSignalsFromQuestion(
@@ -364,7 +403,15 @@ export class ChatService {
     const knowledge = dto.knowledgeBaseArticleId
       ? await this.prisma.knowledgeBaseArticle.findUnique({
           where: { id: dto.knowledgeBaseArticleId },
-          select: { id: true, title: true, content: true },
+          select: {
+            id: true,
+            title: true,
+            content: true,
+            summary: true,
+            resolution: true,
+            keywords: true,
+            tags: true,
+          },
         })
       : null;
 
@@ -373,7 +420,7 @@ export class ChatService {
     }
 
     const sourceConfidenceScore = knowledge
-      ? await this.recomputeSourceConfidence(dto.content, knowledge.id)
+      ? await this.recomputeSourceConfidence(dto.content, knowledge)
       : null;
     const aiContent = await this.generateAiReply(
       session.id,
