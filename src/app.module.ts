@@ -10,6 +10,7 @@ import { KnowledgeBaseModule } from "./knowledge-base/knowledge-base.module";
 import { DashboardModule } from "./dashboard/dashboard.module";
 import { LearningModule } from "./learning/learning.module";
 import { SkillRadarModule } from "./skill-radar/skill-radar.module";
+import { HealthModule } from "./health/health.module";
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { SkillRadarModule } from "./skill-radar/skill-radar.module";
     DashboardModule,
     LearningModule,
     SkillRadarModule,
+    HealthModule,
   ],
 })
 export class AppModule {}
