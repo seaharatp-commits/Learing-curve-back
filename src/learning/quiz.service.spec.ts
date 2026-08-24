@@ -616,6 +616,36 @@ describe("QuizService.submitAttempt", () => {
     );
   });
 
+  it("creates a new attempt record for every successful submission", async () => {
+    const { service, prisma } = makeService();
+    prisma.quiz.findUnique.mockResolvedValue({
+      id: "quiz-1",
+      createdByUserId: "user-1",
+      lessonId: "lesson-1",
+      questions: [
+        {
+          id: "q1",
+          questionText: "Question 1",
+          correctIndex: 0,
+          explanation: "exp1",
+          options: ["a", "b", "c", "d"],
+          skillMappings: [],
+        },
+      ],
+    });
+    prisma.quizAttempt.create
+      .mockResolvedValueOnce({ id: "attempt-1", submittedAt: new Date("2026-07-06T09:00:00.000Z") })
+      .mockResolvedValueOnce({ id: "attempt-2", submittedAt: new Date("2026-07-06T09:05:00.000Z") });
+
+    const answers = { answers: [{ questionId: "q1", selectedIndex: 0 }] };
+    const first = await service.submitAttempt(user, "quiz-1", answers);
+    const second = await service.submitAttempt(user, "quiz-1", answers);
+
+    expect(first.attemptId).toBe("attempt-1");
+    expect(second.attemptId).toBe("attempt-2");
+    expect(prisma.quizAttempt.create).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects answers for question ids that do not belong to this quiz", async () => {
     const { service, prisma } = makeService();
     prisma.quiz.findUnique.mockResolvedValue({
@@ -753,6 +783,36 @@ describe("QuizService.listAttempts", () => {
           explanation: "exp1",
         },
       ],
+    });
+  });
+
+  it("does not expose attempts from another user's quiz", async () => {
+    const { service, prisma } = makeService();
+    prisma.quiz.findUnique.mockResolvedValue({
+      id: "quiz-1",
+      title: "Other user's quiz",
+      createdByUserId: "user-2",
+    });
+
+    await expect(service.listAttempts(user, "quiz-1")).rejects.toThrow(NotFoundException);
+    expect(prisma.quizAttempt.findMany).not.toHaveBeenCalled();
+  });
+
+  it("lets an admin inspect all attempts for an accessible quiz", async () => {
+    const { service, prisma } = makeService();
+    const admin: RequestUser = { id: "admin-1", email: "admin@example.com", role: "ADMIN" };
+    prisma.quiz.findUnique.mockResolvedValue({
+      id: "quiz-1",
+      title: "Shared quiz",
+      createdByUserId: "user-2",
+    });
+    prisma.quizAttempt.findMany.mockResolvedValue([]);
+
+    await service.listAttempts(admin, "quiz-1");
+
+    expect(prisma.quizAttempt.findMany).toHaveBeenCalledWith({
+      where: { quizId: "quiz-1" },
+      orderBy: { submittedAt: "desc" },
     });
   });
 });

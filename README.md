@@ -93,3 +93,14 @@ The backend is available at `http://localhost:3333/api`.
 
 Before deployment, verify `DATABASE_URL`, `JWT_SECRET`, `AI_API_URL`,
 `CORS_ORIGINS`, and the frontend `NEXT_PUBLIC_API_URL`/`BACKEND_API_URL`.
+
+## Deployment health probes
+
+Use `/api/health` as the liveness probe. It only confirms that the backend
+process is responding and does not require PostgreSQL. Use
+`/api/health/ready` as the readiness probe. It runs a lightweight database
+query and returns `503` while PostgreSQL is unavailable, so traffic can be
+held back without restarting a healthy backend process.
+
+An example Kubernetes probe configuration is in
+`deployment/health-probes.example.yaml`.

@@ -22,6 +22,7 @@ export class AiService {
   }
 
   async chat(messages: AiChatMessage[], options: AiChatOptions = {}): Promise<string> {
+    const startedAt = Date.now();
     try {
       const { data } = await axios.post<AiChatResponse>(
         `${this.baseUrl}/chat`,
@@ -40,14 +41,17 @@ export class AiService {
       }
 
       this.logger.log(
-        `AI reply from ${data.data.provider}/${data.data.model} in ${data.data.latency_ms}ms`,
+        `AI request completed provider=${data.data.provider} model=${data.data.model} ` +
+        `latencyMs=${Date.now() - startedAt} gatewayLatencyMs=${data.data.latency_ms}`,
       );
       return data.data.content;
     } catch (error) {
       const status = axios.isAxiosError(error) && error.response?.status
         ? ` HTTP ${error.response.status}`
         : "";
-      this.logger.warn(`AI API Center request failed${status}; caller fallback will be used`);
+      this.logger.warn(
+        `AI API Center request failed${status} latencyMs=${Date.now() - startedAt}; caller fallback will be used`,
+      );
       const normalizedError = new Error("AI API Center ไม่พร้อมใช้งานชั่วคราว") as Error & {
         response?: { status: number };
       };

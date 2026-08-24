@@ -394,6 +394,11 @@ export class SkillRadarService {
       create: { userId, positionId, ...data },
     });
 
+    this.logger.log(
+      `Career Alignment generated user=${userId} position=${positionId} ` +
+      `source=${content.generatedBy} scoreHash=${skillScoreHash}`,
+    );
+
     return this.toCareerAlignmentResponse(radar.position.name, saved);
   }
 
@@ -1171,6 +1176,12 @@ export class SkillRadarService {
         },
       }),
     ]);
+
+    this.logger.debug(
+      `Skill score event recorded user=${input.userId} position=${skill.positionId} ` +
+      `skill=${input.skillId} source=${input.sourceType} sourceId=${input.sourceId ?? "none"} ` +
+      `delta=${scoreDelta} scoreAfter=${scoreAfter}`,
+    );
 
     return { score, event };
   }

@@ -231,7 +231,9 @@ export class RecommendationService {
 
       return this.normalizeRerankReply(reply, input.candidates);
     } catch (error) {
-      this.logger.warn(`AI ล่ม: KB reranking unavailable: ${error}`);
+      this.logger.warn(
+        `KB rerank fallback used candidates=${input.candidates.length}; continuing with caller fallback`,
+      );
       throw new Error(`AI ล่ม: KB reranking unavailable (${error})`);
     }
   }
@@ -331,7 +333,7 @@ export class RecommendationService {
     try {
       return await this.recommendWithAi(query, articles);
     } catch (error) {
-      this.logger.warn(`AI ล่ม: AI-based recommendation unavailable: ${error}`);
+      this.logger.warn("KB recommendation fallback used; AI-based recommendation unavailable");
       throw new Error(`AI ล่ม: AI-based recommendation unavailable (${error})`);
     }
   }

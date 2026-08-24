@@ -246,8 +246,11 @@ export class ChatService {
     try {
       const reply = await this.aiService.chat(messages, CHAT_AI_OPTIONS);
       return sanitizeReply(reply);
-    } catch (error) {
-      this.logger.error(`AI Develyst call failed, falling back to canned reply: ${error}`);
+    } catch {
+      this.logger.warn(
+        `AI answer fallback used source=${knowledge ? "KNOWLEDGE_BASE" : "GENERAL_AI"} ` +
+        `kbTitle=${knowledge?.title ?? "none"}`,
+      );
       return this.fallbackReply(content, knowledge);
     }
   }
@@ -453,6 +456,12 @@ export class ChatService {
         sourceConfidenceScore,
       },
     });
+
+    this.logger.log(
+      `Chat answer saved session=${session.id} source=${knowledge ? "KNOWLEDGE_BASE" : "GENERAL_AI"} ` +
+      `kbArticleId=${knowledge?.id ?? "none"} confidence=${sourceConfidenceScore ?? "none"} ` +
+      `recommendations=${recommendationFlow.recommendedKnowledgeBases.length}`,
+    );
 
     return {
       session,
