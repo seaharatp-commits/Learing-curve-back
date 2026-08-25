@@ -22,6 +22,7 @@ export class KnowledgeBaseController {
   ) {}
 
   @Get()
+  @Roles("ADMIN")
   list() {
     return this.knowledgeBaseService.list();
   }
