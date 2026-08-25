@@ -1187,42 +1187,23 @@ export class SkillRadarService {
   }
 
   async setQuestionSkillMappings(questionId: string, dto: SetQuestionSkillsDto) {
-    const question = await this.prisma.question.findUnique({
-      where: { id: questionId },
-      select: { id: true, quizId: true },
-    });
+    const question = await this.prisma.question.findUnique({ where: { id: questionId } });
     if (!question) throw new NotFoundException("ไม่พบคำถามนี้");
 
     const uniqueMappings = Array.from(
       new Map(dto.mappings.map((mapping) => [mapping.skillId, mapping])).values(),
     );
     const skillIds = uniqueMappings.map((mapping) => mapping.skillId);
-    const quiz =
-      skillIds.length > 0
-        ? await this.prisma.quiz.findUnique({
-            where: { id: question.quizId },
-            select: { positionId: true },
-          })
-        : null;
-    if (skillIds.length > 0 && !quiz) throw new NotFoundException("ไม่พบแบบทดสอบของคำถามนี้");
     const skills =
       skillIds.length === 0
         ? []
         : await this.prisma.positionSkill.findMany({
             where: { id: { in: skillIds }, isActive: true, position: { isActive: true } },
-            select: { id: true, positionId: true },
+            select: { id: true },
           });
 
     if (skills.length !== skillIds.length) {
       throw new BadRequestException("มี skill บางรายการที่ไม่พร้อมใช้งานหรือไม่มีอยู่จริง");
-    }
-
-    const skillPositionIds = new Set(skills.map((skill) => skill.positionId));
-    if (quiz?.positionId && skills.some((skill) => skill.positionId !== quiz.positionId)) {
-      throw new BadRequestException("Skill ต้องอยู่ใน Position เดียวกับ Quiz นี้");
-    }
-    if (!quiz?.positionId && skillPositionIds.size > 1) {
-      throw new BadRequestException("คำถามหนึ่งข้อผูก Skill ได้จาก Position เดียวกันเท่านั้น");
     }
 
     await this.prisma.$transaction([

@@ -236,48 +236,6 @@ export class QuizService {
     }
   }
 
-  private async resolveNewQuizPositionId(userId: string): Promise<string | undefined> {
-    try {
-      const user = await this.prisma.user.findUnique({
-        where: { id: userId },
-        select: { preferredPosition: { select: { id: true, isActive: true } } },
-      });
-
-      return user?.preferredPosition?.isActive ? user.preferredPosition.id : undefined;
-    } catch (error) {
-      // Position is optional metadata for a new quiz. If an older backend
-      // process has not refreshed its Prisma Client yet, keep quiz creation
-      // compatible with the legacy nullable position flow.
-      this.logger.warn(`Could not resolve preferred Position for quiz ${userId}: ${error}`);
-      return undefined;
-    }
-  }
-
-  private isMissingQuizPositionColumnError(error: unknown): boolean {
-    if (!error || typeof error !== "object") return false;
-    const prismaError = error as { code?: unknown; message?: unknown; meta?: unknown };
-    if (prismaError.code !== "P2022") return false;
-
-    const details = [prismaError.message, JSON.stringify(prismaError.meta)].filter(Boolean).join(" ");
-    return /positionId|position_id/i.test(details);
-  }
-
-  private async createQuizWithOptionalPosition(
-    args: Prisma.QuizCreateArgs,
-    positionId?: string,
-  ) {
-    try {
-      return await this.prisma.quiz.create(args);
-    } catch (error) {
-      if (!positionId || !this.isMissingQuizPositionColumnError(error)) throw error;
-
-      const legacyData = { ...args.data } as Prisma.QuizCreateArgs["data"] & { positionId?: string };
-      delete legacyData.positionId;
-      this.logger.warn("Quiz positionId column is unavailable; creating a legacy quiz without Position metadata");
-      return this.prisma.quiz.create({ ...args, data: legacyData });
-    }
-  }
-
   /**
    * Applies calculatePositiveSkillScore/calculateWrongAnswerSkillScore for one
    * skill affected by one answer, and persists the result immediately.
@@ -642,32 +600,24 @@ export class QuizService {
       );
     }
 
-    const positionId = await this.resolveNewQuizPositionId(user.id);
-    const quiz = await this.createQuizWithOptionalPosition(
-      {
-        data: {
-          title: `แบบทดสอบ: ${article.title}`,
-          createdByUserId: user.id,
-          sourceArticleId: article.id,
-          ...(positionId ? { positionId } : {}),
-          questions: {
-            create: questions.map((q) => ({
-              questionText: q.question,
-              options: q.options,
-              correctIndex: q.correctIndex,
-              explanation: q.explanation,
-            })),
-          },
+    const quiz = await this.prisma.quiz.create({
+      data: {
+        title: `แบบทดสอบ: ${article.title}`,
+        createdByUserId: user.id,
+        sourceArticleId: article.id,
+        questions: {
+          create: questions.map((q) => ({
+            questionText: q.question,
+            options: q.options,
+            correctIndex: q.correctIndex,
+            explanation: q.explanation,
+          })),
         },
-        include: { questions: true },
       },
-      positionId,
-    );
+      include: { questions: true },
+    });
 
-    const quizWithQuestions = quiz as unknown as { questions?: unknown[] };
-    const questionCount = Array.isArray(quizWithQuestions.questions)
-      ? quizWithQuestions.questions.length
-      : 0;
+    const questionCount = quiz.questions.length;
     this.logger.log(`Generated quiz ${quiz.id} (${questionCount} questions) from article ${articleId}`);
     return quiz;
   }
@@ -804,26 +754,21 @@ export class QuizService {
       throw new BadRequestException("AI สร้างแบบทดสอบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
     }
 
-    const positionId = await this.resolveNewQuizPositionId(user.id);
-    const quiz = await this.createQuizWithOptionalPosition(
-      {
-        data: {
-          title: `แบบทดสอบ: ${lesson.title}`,
-          createdByUserId: user.id,
-          lessonId: lesson.id,
-          ...(positionId ? { positionId } : {}),
-          questions: {
-            create: questions.map((q) => ({
-              questionText: q.question,
-              options: q.options,
-              correctIndex: q.correctIndex,
-              explanation: q.explanation,
-            })),
-          },
+    const quiz = await this.prisma.quiz.create({
+      data: {
+        title: `แบบทดสอบ: ${lesson.title}`,
+        createdByUserId: user.id,
+        lessonId: lesson.id,
+        questions: {
+          create: questions.map((q) => ({
+            questionText: q.question,
+            options: q.options,
+            correctIndex: q.correctIndex,
+            explanation: q.explanation,
+          })),
         },
       },
-      positionId,
-    );
+    });
 
     this.logger.log(`Generated quiz ${quiz.id} from lesson ${lesson.id}`);
     return { quizId: quiz.id, title: quiz.title };
@@ -870,7 +815,6 @@ export class QuizService {
     return {
       id: quiz.id,
       title: quiz.title,
-      positionId: quiz.positionId ?? null,
       questions: quiz.questions.map((q) => ({
         id: q.id,
         questionText: q.questionText,
