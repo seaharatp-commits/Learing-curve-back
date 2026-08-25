@@ -62,6 +62,7 @@ export interface QuizQuestionForAttempt {
 export interface QuizForAttempt {
   id: string;
   title: string;
+  positionId: string | null;
   questions: QuizQuestionForAttempt[];
 }
 

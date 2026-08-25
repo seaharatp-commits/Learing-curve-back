@@ -109,6 +109,10 @@ describe("QuizService.generateFromArticle", () => {
 
   it("creates a quiz with parsed questions from a valid AI response", async () => {
     const { service, prisma, aiService } = makeService();
+    prisma.user.findUnique.mockResolvedValue({
+      id: "user-1",
+      preferredPosition: { id: "position-1", isActive: true },
+    });
     prisma.knowledgeBaseArticle.findUnique.mockResolvedValue({
       id: "kb-1",
       title: "วิธีรีเซ็ตรหัสผ่าน",
@@ -123,6 +127,7 @@ describe("QuizService.generateFromArticle", () => {
     const createArgs = prisma.quiz.create.mock.calls[0][0];
     expect(createArgs.data.createdByUserId).toBe("user-1");
     expect(createArgs.data.sourceArticleId).toBe("kb-1");
+    expect(createArgs.data.positionId).toBe("position-1");
     expect(createArgs.data.questions.create).toHaveLength(2);
     expect(createArgs.data.questions.create[0]).toEqual({
       questionText: "ข้อ 1?",
@@ -394,6 +399,10 @@ describe("QuizService.askLessonQuestion", () => {
 describe("QuizService.generateQuizFromLesson", () => {
   it("creates a quiz from lesson content and the latest additional prompt", async () => {
     const { service, prisma, aiService } = makeService();
+    prisma.user.findUnique.mockResolvedValue({
+      id: "user-1",
+      preferredPosition: { id: "position-1", isActive: true },
+    });
     prisma.lesson.findUnique.mockResolvedValue({
       id: "lesson-1",
       title: "Lesson 1",
@@ -417,6 +426,7 @@ describe("QuizService.generateQuizFromLesson", () => {
         title: expect.any(String),
         createdByUserId: "user-1",
         lessonId: "lesson-1",
+        positionId: "position-1",
         questions: {
           create: [
             {
@@ -435,6 +445,51 @@ describe("QuizService.generateQuizFromLesson", () => {
         },
       },
     });
+  });
+
+  it("still creates a legacy quiz when preferred Position lookup is unavailable", async () => {
+    const { service, prisma, aiService } = makeService();
+    prisma.lesson.findUnique.mockResolvedValue({
+      id: "lesson-1",
+      title: "Lesson 1",
+      content: "This lesson content is long enough to generate a useful assessment for the learner.",
+      createdByUserId: "user-1",
+    });
+    aiService.chat.mockResolvedValue(VALID_QUESTIONS_JSON);
+    prisma.user.findUnique
+      .mockResolvedValueOnce({ id: "user-1" })
+      .mockRejectedValueOnce(new Error("Prisma Client is not ready"));
+    prisma.quiz.create.mockResolvedValue({ id: "quiz-1", title: "แบบทดสอบ: Lesson 1" });
+
+    const result = await service.generateQuizFromLesson(user, "lesson-1");
+
+    expect(result).toEqual({ quizId: "quiz-1", title: "แบบทดสอบ: Lesson 1" });
+    expect(prisma.quiz.create).toHaveBeenCalledWith({
+      data: expect.not.objectContaining({ positionId: expect.anything() }),
+    });
+  });
+
+  it("retries without Position metadata when the database is missing the new column", async () => {
+    const { service, prisma, aiService } = makeService();
+    prisma.lesson.findUnique.mockResolvedValue({
+      id: "lesson-1",
+      title: "Lesson 1",
+      content: "This lesson content is long enough to generate a useful assessment for the learner.",
+      createdByUserId: "user-1",
+    });
+    aiService.chat.mockResolvedValue(VALID_QUESTIONS_JSON);
+    prisma.user.findUnique
+      .mockResolvedValueOnce({ id: "user-1" })
+      .mockResolvedValueOnce({ preferredPosition: { id: "position-1", isActive: true } });
+    prisma.quiz.create
+      .mockRejectedValueOnce({ code: "P2022", message: "The column positionId does not exist" })
+      .mockResolvedValueOnce({ id: "quiz-1", title: "แบบทดสอบ: Lesson 1" });
+
+    const result = await service.generateQuizFromLesson(user, "lesson-1");
+
+    expect(result).toEqual({ quizId: "quiz-1", title: "แบบทดสอบ: Lesson 1" });
+    expect(prisma.quiz.create).toHaveBeenCalledTimes(2);
+    expect(prisma.quiz.create.mock.calls[1][0].data).not.toHaveProperty("positionId");
   });
 });
 

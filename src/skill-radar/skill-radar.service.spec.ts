@@ -60,6 +60,9 @@ function makeService() {
     question: {
       findUnique: jest.fn(),
     },
+    quiz: {
+      findUnique: jest.fn(),
+    },
     careerAlignment: {
       findUnique: jest.fn().mockResolvedValue(null),
       upsert: jest.fn((args) => Promise.resolve({ id: "ca-1", ...args.create, ...args.update })),
@@ -119,6 +122,44 @@ describe("SkillRadarService Phase 9 admin analytics", () => {
       limit: 10,
       totalPages: 5,
     });
+  });
+
+  it("rejects mapping one question to skills from different positions", async () => {
+    const { service, prisma } = makeService();
+    prisma.question.findUnique.mockResolvedValue({ id: "question-1", quizId: "quiz-legacy" });
+    prisma.quiz.findUnique.mockResolvedValue({ positionId: null });
+    prisma.positionSkill.findMany.mockResolvedValue([
+      makeSkill({ id: "skill-frontend", positionId: "position-1" }),
+      makeSkill({ id: "skill-accounting", positionId: "position-2" }),
+    ]);
+
+    await expect(
+      service.setQuestionSkillMappings("question-1", {
+        mappings: [
+          { skillId: "skill-frontend", weight: 1 },
+          { skillId: "skill-accounting", weight: 1 },
+        ],
+      }),
+    ).rejects.toThrow("คำถามหนึ่งข้อผูก Skill ได้จาก Position เดียวกันเท่านั้น");
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects mapping a new quiz to a skill from another position", async () => {
+    const { service, prisma } = makeService();
+    prisma.question.findUnique.mockResolvedValue({ id: "question-1", quizId: "quiz-new" });
+    prisma.quiz.findUnique.mockResolvedValue({ positionId: "position-1" });
+    prisma.positionSkill.findMany.mockResolvedValue([
+      makeSkill({ id: "skill-accounting", positionId: "position-2" }),
+    ]);
+
+    await expect(
+      service.setQuestionSkillMappings("question-1", {
+        mappings: [{ skillId: "skill-accounting", weight: 1 }],
+      }),
+    ).rejects.toThrow("Skill ต้องอยู่ใน Position เดียวกับ Quiz นี้");
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });
 

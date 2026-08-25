@@ -136,18 +136,21 @@ model Quiz {
   createdByUserId String?
   lessonId        String?
   sourceArticleId String?
+  positionId      String?
   title           String
   createdAt       DateTime @default(now())
 
   createdBy     User?                 @relation("QuizCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
   lesson        Lesson?               @relation(fields: [lessonId], references: [id], onDelete: Cascade)
   sourceArticle KnowledgeBaseArticle? @relation(fields: [sourceArticleId], references: [id], onDelete: SetNull)
+  position      Position?              @relation(fields: [positionId], references: [id], onDelete: SetNull)
   questions     Question[]
   attempts      QuizAttempt[]
 
   @@index([createdByUserId])
   @@index([lessonId])
   @@index([sourceArticleId])
+  @@index([positionId])
   @@map("quizzes")
 }
 
@@ -211,6 +214,7 @@ model Position {
   updatedAt   DateTime @updatedAt
 
   skills           PositionSkill[]
+  quizzes           Quiz[]
   userSkillScores  UserSkillScore[]
   skillScoreEvents SkillScoreEvent[]
   careerAlignments CareerAlignment[]
