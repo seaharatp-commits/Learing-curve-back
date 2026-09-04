@@ -27,6 +27,7 @@ import type {
 } from "./skill-radar.types";
 import type { PositionDto } from "./dto/position.dto";
 import type { PositionSkillDto } from "./dto/position-skill.dto";
+import type { CreatePositionSkillsDto } from "./dto/create-position-skills.dto";
 import type { SetQuestionSkillsDto } from "./dto/set-question-skills.dto";
 import type { UpdateMyPositionDto } from "./dto/update-my-position.dto";
 
@@ -217,6 +218,7 @@ export class SkillRadarService {
   async createSkill(positionId: string, dto: PositionSkillDto) {
     const position = await this.prisma.position.findUnique({ where: { id: positionId } });
     if (!position) throw new NotFoundException("ไม่พบตำแหน่งนี้");
+    if (!position.isActive) throw new BadRequestException("ไม่สามารถเพิ่ม Skill ใน Position ที่ปิดใช้งานได้");
 
     const name = dto.name.trim();
     if (!name) throw new BadRequestException("กรุณาระบุชื่อ skill");
@@ -230,6 +232,47 @@ export class SkillRadarService {
         weight: dto.weight ?? 1,
         isActive: dto.isActive ?? true,
       },
+    });
+  }
+
+  async createSkills(positionId: string, dto: CreatePositionSkillsDto) {
+    const position = await this.prisma.position.findUnique({ where: { id: positionId } });
+    if (!position) throw new NotFoundException("ไม่พบตำแหน่งนี้");
+    if (!position.isActive) throw new BadRequestException("ไม่สามารถเพิ่ม Skill ใน Position ที่ปิดใช้งานได้");
+
+    const skills = dto.skills.map((skill) => ({
+      name: skill.name.trim(),
+      description: skill.description?.trim() || null,
+      keywords: (skill.keywords ?? []).map((keyword) => keyword.trim()).filter(Boolean),
+      weight: skill.weight ?? 1,
+      isActive: skill.isActive ?? true,
+    }));
+    if (skills.some((skill) => !skill.name)) {
+      throw new BadRequestException("กรุณาระบุชื่อ Skill ทุกรายการ");
+    }
+
+    const normalizedNames = skills.map((skill) => skill.name.toLocaleLowerCase());
+    if (new Set(normalizedNames).size !== normalizedNames.length) {
+      throw new BadRequestException("ไม่สามารถบันทึก Skill ที่มีชื่อซ้ำกันได้");
+    }
+
+    const existingSkills = await this.prisma.positionSkill.findMany({
+      where: { positionId },
+      select: { name: true },
+    });
+    const existingNames = new Set(existingSkills.map((skill) => skill.name.toLocaleLowerCase()));
+    if (normalizedNames.some((name) => existingNames.has(name))) {
+      throw new BadRequestException("มี Skill ชื่อนี้อยู่ใน Position แล้ว");
+    }
+
+    return this.prisma.$transaction(async (transaction) => {
+      await transaction.positionSkill.createMany({
+        data: skills.map((skill) => ({ ...skill, positionId })),
+      });
+      return transaction.positionSkill.findMany({
+        where: { positionId, name: { in: skills.map((skill) => skill.name) } },
+        orderBy: { createdAt: "asc" },
+      });
     });
   }
 
@@ -267,6 +310,7 @@ export class SkillRadarService {
   async suggestSkillsForPosition(positionId: string): Promise<PositionSkillSuggestion[]> {
     const position = await this.prisma.position.findUnique({ where: { id: positionId } });
     if (!position) throw new NotFoundException("ไม่พบตำแหน่งนี้");
+    if (!position.isActive) throw new BadRequestException("ไม่สามารถแนะนำ Skill สำหรับ Position ที่ปิดใช้งานได้");
 
     const prompt = this.buildPositionSkillSuggestionPrompt(position.name, position.description);
     const reply = await this.aiService.chat(

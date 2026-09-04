@@ -43,6 +43,18 @@ function makeService() {
   return { service, prisma, aiService, categoriesService, recommendationService };
 }
 
+describe("KnowledgeLearningService.generateDraft", () => {
+  it("returns the generated draft even when duplicate recommendations are unavailable", async () => {
+    const { service, recommendationService } = makeService();
+    recommendationService.recommend.mockRejectedValue(new Error("AI Center unavailable"));
+
+    const result = await service.generateDraft("เปิดแอปไม่ได้หลังติดตั้ง");
+
+    expect(result.draft).toEqual(DRAFT_JSON);
+    expect(result.similarArticles).toEqual([]);
+  });
+});
+
 describe("KnowledgeLearningService.confirmKnowledge", () => {
   it("creates a new article with the given author when no target is set", async () => {
     const { service, prisma } = makeService();

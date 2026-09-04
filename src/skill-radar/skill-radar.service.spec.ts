@@ -1,3 +1,4 @@
+import { BadRequestException } from "@nestjs/common";
 import { SkillRadarService } from "./skill-radar.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
@@ -28,6 +29,7 @@ function makeService() {
       findFirst: jest.fn(),
       findMany: jest.fn(),
       create: jest.fn(),
+      createMany: jest.fn(),
       update: jest.fn(),
     },
     positionSkill: {
@@ -121,6 +123,58 @@ describe("SkillRadarService Phase 9 admin analytics", () => {
     });
   });
 
+});
+
+describe("SkillRadarService admin skill creation", () => {
+  it("does not add a skill to an inactive position", async () => {
+    const { service, prisma } = makeService();
+    prisma.position.findUnique.mockResolvedValue({ id: "position-1", isActive: false });
+
+    await expect(
+      service.createSkill("position-1", {
+        name: "FrontEnd",
+        description: "UI development",
+        keywords: ["react"],
+        weight: 1,
+        isActive: true,
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    expect(prisma.positionSkill.create).not.toHaveBeenCalled();
+  });
+
+  it("creates AI suggestions in one transaction", async () => {
+    const { service, prisma } = makeService();
+    prisma.position.findUnique.mockResolvedValue({ id: "position-1", isActive: true });
+    prisma.positionSkill.findMany.mockResolvedValue([]);
+    const transaction = {
+      positionSkill: {
+        createMany: jest.fn().mockResolvedValue({ count: 2 }),
+        findMany: jest.fn().mockResolvedValue([
+          makeSkill({ id: "skill-frontend", name: "FrontEnd" }),
+          makeSkill({ id: "skill-testing", name: "Testing" }),
+        ]),
+      },
+    };
+    prisma.$transaction.mockImplementation(async (callback: (client: typeof transaction) => Promise<unknown>) =>
+      callback(transaction),
+    );
+
+    const result = await service.createSkills("position-1", {
+      skills: [
+        { name: " FrontEnd ", description: " UI ", keywords: [" react ", ""], weight: 1, isActive: true },
+        { name: "Testing", description: "Tests", keywords: ["jest"], weight: 1, isActive: true },
+      ],
+    });
+
+    expect(transaction.positionSkill.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({ positionId: "position-1", name: "FrontEnd", keywords: ["react"] }),
+        expect.objectContaining({ positionId: "position-1", name: "Testing", keywords: ["jest"] }),
+      ]),
+    });
+    expect(result).toHaveLength(2);
+  });
 });
 
 describe("SkillRadarService Phase 4/5 scoring", () => {

@@ -7,6 +7,7 @@ import type { RequestUser } from "../auth/strategies/jwt.strategy";
 import { SkillRadarService } from "./skill-radar.service";
 import { PositionDto } from "./dto/position.dto";
 import { PositionSkillDto } from "./dto/position-skill.dto";
+import { CreatePositionSkillsDto } from "./dto/create-position-skills.dto";
 import { SetQuestionSkillsDto } from "./dto/set-question-skills.dto";
 import { UpdateMyPositionDto } from "./dto/update-my-position.dto";
 
@@ -84,6 +85,12 @@ export class SkillRadarController {
   @Post("admin/positions/:id/skills")
   createSkill(@Param("id") id: string, @Body() dto: PositionSkillDto) {
     return this.skillRadarService.createSkill(id, dto);
+  }
+
+  @Roles("ADMIN")
+  @Post("admin/positions/:id/skills/bulk")
+  createSkills(@Param("id") id: string, @Body() dto: CreatePositionSkillsDto) {
+    return this.skillRadarService.createSkills(id, dto);
   }
 
   @Roles("ADMIN")

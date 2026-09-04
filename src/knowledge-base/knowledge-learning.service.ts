@@ -1,8 +1,9 @@
-import { Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiService } from "../ai/ai.service";
 import { CategoriesService } from "../common/categories.service";
 import { RecommendationService } from "./recommendation.service";
+import type { RecommendationResult } from "./recommendation.types";
 import type { AiChatMessage } from "../ai/ai.types";
 import type { ArticleDraft, ArticleFields } from "./article-draft.types";
 import type { ConfirmKnowledgeDto } from "./dto/confirm-knowledge.dto";
@@ -63,6 +64,16 @@ export class KnowledgeLearningService {
   private async extractDraftFromText(text: string): Promise<ArticleDraft> {
     const reply = await this.aiService.chat(this.buildExtractionMessagesFromText(text));
     return this.parseDraft(reply);
+  }
+
+  private requiredText(value: string, fieldName: string) {
+    const normalizedValue = value.trim();
+    if (!normalizedValue) throw new BadRequestException(`กรุณาระบุ${fieldName}`);
+    return normalizedValue;
+  }
+
+  private optionalText(value: string) {
+    return value.trim();
   }
 
   private async findSimilarArticle(draft: ArticleDraft): Promise<KnowledgeBaseArticle | null> {
@@ -142,11 +153,16 @@ export class KnowledgeLearningService {
   // confirmKnowledge() to actually save.
   async generateDraft(text: string) {
     const draft = await this.extractDraftFromText(text);
-    const similarArticles = await this.recommendationService.recommend({
-      title: draft.title,
-      description: `${draft.summary} ${draft.symptoms}`,
-      category: draft.category,
-    });
+    let similarArticles: RecommendationResult[] = [];
+    try {
+      similarArticles = await this.recommendationService.recommend({
+        title: draft.title,
+        description: `${draft.summary} ${draft.symptoms}`,
+        category: draft.category,
+      });
+    } catch (error) {
+      this.logger.warn(`KB duplicate recommendation unavailable; returning draft without matches: ${error}`);
+    }
 
     return { draft, originalText: text, similarArticles };
   }
@@ -155,45 +171,50 @@ export class KnowledgeLearningService {
   // set, the user chose to update an existing article instead of creating a
   // duplicate — original text from both contributions is preserved.
   async confirmKnowledge(dto: ConfirmKnowledgeDto, authorId: string) {
-    const category = await this.categoriesService.resolveByName(dto.category);
+    const title = this.requiredText(dto.title, "หัวข้อ");
+    const categoryName = this.requiredText(dto.category, "หมวดหมู่");
+    const originalText = this.requiredText(dto.originalText, "ข้อความต้นฉบับ");
     const fields: ArticleFields = {
-      title: dto.title,
-      summary: dto.summary,
-      symptoms: dto.symptoms,
-      environment: dto.environment,
-      rootCause: dto.rootCause,
-      resolution: dto.resolution,
-      verification: dto.verification,
-      keywords: dto.keywords,
-      tags: dto.tags,
-      category: dto.category,
+      title,
+      summary: this.optionalText(dto.summary),
+      symptoms: this.optionalText(dto.symptoms),
+      environment: this.optionalText(dto.environment),
+      rootCause: this.optionalText(dto.rootCause),
+      resolution: this.optionalText(dto.resolution),
+      verification: this.optionalText(dto.verification),
+      keywords: dto.keywords.map((keyword) => keyword.trim()).filter(Boolean),
+      tags: dto.tags.map((tag) => tag.trim()).filter(Boolean),
+      category: categoryName,
     };
     const content = this.renderContent(fields);
+    if (!content) throw new BadRequestException("กรุณาระบุเนื้อหา");
+    const category = await this.categoriesService.resolveByName(categoryName);
+    const targetArticleId = dto.targetArticleId?.trim() || undefined;
 
-    if (dto.targetArticleId) {
+    if (targetArticleId) {
       const existing = await this.prisma.knowledgeBaseArticle.findUnique({
-        where: { id: dto.targetArticleId },
+        where: { id: targetArticleId },
       });
       if (!existing) throw new NotFoundException("ไม่พบบทความที่จะอัปเดต");
 
-      const mergedKeywords = Array.from(new Set([...existing.keywords, ...dto.keywords]));
-      const mergedTags = Array.from(new Set([...existing.tags, ...dto.tags]));
+      const mergedKeywords = Array.from(new Set([...existing.keywords, ...fields.keywords]));
+      const mergedTags = Array.from(new Set([...existing.tags, ...fields.tags]));
       const mergedOriginalText = existing.originalText
-        ? `${existing.originalText}\n---\n${dto.originalText}`
-        : dto.originalText;
+        ? `${existing.originalText}\n---\n${originalText}`
+        : originalText;
 
       const article = await this.prisma.knowledgeBaseArticle.update({
-        where: { id: dto.targetArticleId },
+        where: { id: targetArticleId },
         data: {
-          title: dto.title,
+          title,
           content,
           categoryId: category.id,
-          summary: dto.summary,
-          symptoms: dto.symptoms,
-          environment: dto.environment,
-          rootCause: dto.rootCause,
-          resolution: dto.resolution,
-          verification: dto.verification,
+          summary: fields.summary,
+          symptoms: fields.symptoms,
+          environment: fields.environment,
+          rootCause: fields.rootCause,
+          resolution: fields.resolution,
+          verification: fields.verification,
           keywords: mergedKeywords,
           tags: mergedTags,
           originalText: mergedOriginalText,
@@ -205,19 +226,19 @@ export class KnowledgeLearningService {
 
     const article = await this.prisma.knowledgeBaseArticle.create({
       data: {
-        title: dto.title,
+        title,
         content,
         categoryId: category.id,
         authorId,
-        summary: dto.summary,
-        symptoms: dto.symptoms,
-        environment: dto.environment,
-        rootCause: dto.rootCause,
-        resolution: dto.resolution,
-        verification: dto.verification,
-        keywords: dto.keywords,
-        tags: dto.tags,
-        originalText: dto.originalText,
+        summary: fields.summary,
+        symptoms: fields.symptoms,
+        environment: fields.environment,
+        rootCause: fields.rootCause,
+        resolution: fields.resolution,
+        verification: fields.verification,
+        keywords: fields.keywords,
+        tags: fields.tags,
+        originalText,
       },
     });
     this.logger.log(`Created KB article ${article.id} from contributed knowledge`);

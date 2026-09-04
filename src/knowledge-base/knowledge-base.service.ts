@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { CategoriesService } from "../common/categories.service";
 import { KnowledgeBaseDto } from "./dto/knowledge-base.dto";
@@ -34,6 +34,12 @@ export class KnowledgeBaseService {
     };
   }
 
+  private requiredText(value: string, fieldName: string) {
+    const normalizedValue = value.trim();
+    if (!normalizedValue) throw new BadRequestException(`กรุณาระบุ${fieldName}`);
+    return normalizedValue;
+  }
+
   async list() {
     const articles = await this.prisma.knowledgeBaseArticle.findMany({
       orderBy: { updatedAt: "desc" },
@@ -43,11 +49,14 @@ export class KnowledgeBaseService {
   }
 
   async create(authorId: string, dto: KnowledgeBaseDto) {
-    const category = await this.categoriesService.resolveByName(dto.category);
+    const title = this.requiredText(dto.title, "หัวข้อ");
+    const categoryName = this.requiredText(dto.category, "หมวดหมู่");
+    const content = this.requiredText(dto.content, "เนื้อหา");
+    const category = await this.categoriesService.resolveByName(categoryName);
     const article = await this.prisma.knowledgeBaseArticle.create({
       data: {
-        title: dto.title,
-        content: dto.content,
+        title,
+        content,
         categoryId: category.id,
         authorId,
         summary: dto.summary?.trim() || null,
@@ -61,12 +70,15 @@ export class KnowledgeBaseService {
 
   async update(id: string, dto: KnowledgeBaseDto) {
     await this.ensureExists(id);
-    const category = await this.categoriesService.resolveByName(dto.category);
+    const title = this.requiredText(dto.title, "หัวข้อ");
+    const categoryName = this.requiredText(dto.category, "หมวดหมู่");
+    const content = this.requiredText(dto.content, "เนื้อหา");
+    const category = await this.categoriesService.resolveByName(categoryName);
     const article = await this.prisma.knowledgeBaseArticle.update({
       where: { id },
       data: {
-        title: dto.title,
-        content: dto.content,
+        title,
+        content,
         categoryId: category.id,
         summary: dto.summary?.trim() || null,
         keywords: dto.keywords ?? [],
