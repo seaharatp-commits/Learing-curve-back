@@ -196,6 +196,41 @@ export class SkillRadarService {
     });
   }
 
+  async removePosition(positionId: string) {
+    const position = await this.prisma.position.findUnique({ where: { id: positionId } });
+    if (!position) throw new NotFoundException("ไม่พบตำแหน่งนี้");
+
+    const [skillCount, preferredUserCount, scoreCount, eventCount, alignmentCount, quizCount] = await Promise.all([
+      this.prisma.positionSkill.count({ where: { positionId } }),
+      this.prisma.user.count({ where: { preferredPositionId: positionId } }),
+      this.prisma.userSkillScore.count({ where: { positionId } }),
+      this.prisma.skillScoreEvent.count({ where: { positionId } }),
+      this.prisma.careerAlignment.count({ where: { positionId } }),
+      this.prisma.quiz.count({ where: { positionId } }),
+    ]);
+
+    const dependencies = [
+      [skillCount, "Skill"],
+      [preferredUserCount, "ผู้ใช้"],
+      [scoreCount, "คะแนน Skill Radar"],
+      [eventCount, "ประวัติคะแนน"],
+      [alignmentCount, "Career Alignment"],
+      [quizCount, "Quiz"],
+    ] as const;
+    const usedBy = dependencies
+      .filter(([count]) => count > 0)
+      .map(([count, label]) => `${label} ${count} รายการ`);
+
+    if (usedBy.length > 0) {
+      throw new BadRequestException(
+        `ไม่สามารถลบ Position นี้ได้ เนื่องจากมีข้อมูลที่เกี่ยวข้อง: ${usedBy.join(", ")}. กรุณาปิดใช้งานแทน`,
+      );
+    }
+
+    await this.prisma.position.delete({ where: { id: positionId } });
+    return { success: true };
+  }
+
   async listSkills(positionId: string): Promise<SkillRadarSkill[]> {
     const position = await this.prisma.position.findUnique({ where: { id: positionId } });
     if (!position || !position.isActive) throw new NotFoundException("ไม่พบตำแหน่งนี้");

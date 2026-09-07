@@ -23,6 +23,7 @@ function makeService() {
         preferredPosition: { id: "position-1", name: "Software Engineer", isActive: true },
       }),
       update: jest.fn(),
+      count: jest.fn().mockResolvedValue(0),
     },
     position: {
       findUnique: jest.fn(),
@@ -31,6 +32,7 @@ function makeService() {
       create: jest.fn(),
       createMany: jest.fn(),
       update: jest.fn(),
+      delete: jest.fn(),
     },
     positionSkill: {
       findMany: jest.fn().mockResolvedValue([makeSkill()]),
@@ -40,6 +42,7 @@ function makeService() {
       }),
       create: jest.fn(),
       update: jest.fn(),
+      count: jest.fn().mockResolvedValue(0),
     },
     skillScoreEvent: {
       findMany: jest.fn().mockResolvedValue([]),
@@ -49,6 +52,7 @@ function makeService() {
     userSkillScore: {
       findUnique: jest.fn().mockResolvedValue(null),
       upsert: jest.fn().mockReturnValue({ id: "score-upsert" }),
+      count: jest.fn().mockResolvedValue(0),
     },
     chatMessage: {
       findUnique: jest.fn(),
@@ -65,7 +69,9 @@ function makeService() {
     careerAlignment: {
       findUnique: jest.fn().mockResolvedValue(null),
       upsert: jest.fn((args) => Promise.resolve({ id: "ca-1", ...args.create, ...args.update })),
+      count: jest.fn().mockResolvedValue(0),
     },
+    quiz: { count: jest.fn().mockResolvedValue(0) },
     $transaction: jest.fn().mockResolvedValue([{ id: "score-1" }, { id: "event-1" }]),
   };
   const aiService = { chat: jest.fn() };
@@ -174,6 +180,30 @@ describe("SkillRadarService admin skill creation", () => {
       ]),
     });
     expect(result).toHaveLength(2);
+  });
+});
+
+describe("SkillRadarService protected position deletion", () => {
+  it("deletes a position only when no records refer to it", async () => {
+    const { service, prisma } = makeService();
+    prisma.position.findUnique.mockResolvedValue({ id: "position-1", name: "Temporary", isActive: true });
+
+    await expect(service.removePosition("position-1")).resolves.toEqual({ success: true });
+
+    expect(prisma.position.delete).toHaveBeenCalledWith({ where: { id: "position-1" } });
+  });
+
+  it("rejects deletion and preserves the position when related records exist", async () => {
+    const { service, prisma } = makeService();
+    prisma.position.findUnique.mockResolvedValue({ id: "position-1", name: "Software Engineer", isActive: true });
+    prisma.positionSkill.count.mockResolvedValue(6);
+    prisma.skillScoreEvent.count.mockResolvedValue(12);
+
+    await expect(service.removePosition("position-1")).rejects.toThrow(
+      "ไม่สามารถลบ Position นี้ได้",
+    );
+
+    expect(prisma.position.delete).not.toHaveBeenCalled();
   });
 });
 

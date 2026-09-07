@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Put, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards } from "@nestjs/common";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
@@ -79,6 +79,12 @@ export class SkillRadarController {
   @Patch("admin/positions/:id")
   updatePosition(@Param("id") id: string, @Body() dto: PositionDto) {
     return this.skillRadarService.updatePosition(id, dto);
+  }
+
+  @Roles("ADMIN")
+  @Delete("admin/positions/:id")
+  removePosition(@Param("id") id: string) {
+    return this.skillRadarService.removePosition(id);
   }
 
   @Roles("ADMIN")
