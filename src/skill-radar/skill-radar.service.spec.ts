@@ -177,6 +177,30 @@ describe("SkillRadarService admin skill creation", () => {
   });
 });
 
+describe("SkillRadarService AI skill suggestions", () => {
+  it("returns editable fallback suggestions when the AI Center is unavailable", async () => {
+    const { service, prisma, aiService } = makeService();
+    prisma.position.findUnique.mockResolvedValue({
+      id: "position-1",
+      name: "Financial Accounting",
+      description: "Accounting and reporting",
+      isActive: true,
+    });
+    aiService.chat.mockRejectedValue(new Error("AI Center unavailable"));
+
+    const suggestions = await service.suggestSkillsForPosition("position-1");
+
+    expect(suggestions).toHaveLength(3);
+    expect(suggestions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "Financial Accounting Fundamentals" }),
+        expect.objectContaining({ name: "Financial Accounting Workflow" }),
+        expect.objectContaining({ name: "Financial Accounting Quality Review" }),
+      ]),
+    );
+  });
+});
+
 describe("SkillRadarService Phase 4/5 scoring", () => {
   it("records AI chat skill signals only for skills in the learner selected position", async () => {
     const { service, prisma, aiService } = makeService();

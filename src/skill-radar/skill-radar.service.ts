@@ -307,45 +307,70 @@ export class SkillRadarService {
     ].join("\n");
   }
 
+  private buildFallbackPositionSkillSuggestions(positionName: string): PositionSkillSuggestion[] {
+    const name = positionName.trim().replace(/\s+/g, " ").slice(0, 80) || "Role";
+    const keyword = name.toLowerCase();
+
+    return [
+      {
+        name: `${name} Fundamentals`,
+        description: `Build a solid foundation in the core concepts used in ${name}.`,
+        keywords: [keyword, "fundamentals", "core concepts"],
+      },
+      {
+        name: `${name} Workflow`,
+        description: `Practice the day-to-day workflow and practical techniques for ${name}.`,
+        keywords: [keyword, "workflow", "practical skills"],
+      },
+      {
+        name: `${name} Quality Review`,
+        description: `Review work consistently and improve quality in ${name}.`,
+        keywords: [keyword, "quality", "review"],
+      },
+    ];
+  }
+
   async suggestSkillsForPosition(positionId: string): Promise<PositionSkillSuggestion[]> {
     const position = await this.prisma.position.findUnique({ where: { id: positionId } });
     if (!position) throw new NotFoundException("ไม่พบตำแหน่งนี้");
     if (!position.isActive) throw new BadRequestException("ไม่สามารถแนะนำ Skill สำหรับ Position ที่ปิดใช้งานได้");
 
-    const prompt = this.buildPositionSkillSuggestionPrompt(position.name, position.description);
-    const reply = await this.aiService.chat(
-      [
-        {
-          role: "system",
-          content: "You output only valid JSON. You never include commentary, markdown fences, or text outside the JSON array.",
-        },
-        { role: "user", content: prompt },
-      ],
-      AI_CLASSIFIER_OPTIONS,
-    );
+    try {
+      const prompt = this.buildPositionSkillSuggestionPrompt(position.name, position.description);
+      const reply = await this.aiService.chat(
+        [
+          {
+            role: "system",
+            content: "You output only valid JSON. You never include commentary, markdown fences, or text outside the JSON array.",
+          },
+          { role: "user", content: prompt },
+        ],
+        AI_CLASSIFIER_OPTIONS,
+      );
 
-    const rawSuggestions = this.extractJsonArray(reply);
+      const suggestions: PositionSkillSuggestion[] = this.extractJsonArray(reply)
+        .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+        .map((item) => ({
+          name: typeof item.name === "string" ? item.name.trim().slice(0, 120) : "",
+          description: typeof item.description === "string" ? item.description.trim().slice(0, 500) : "",
+          keywords: Array.isArray(item.keywords)
+            ? item.keywords
+                .filter((keyword): keyword is string => typeof keyword === "string" && keyword.trim().length > 0)
+                .map((keyword) => keyword.trim().slice(0, 80))
+                .slice(0, 30)
+            : [],
+        }))
+        .filter((suggestion) => suggestion.name.length > 0)
+        .slice(0, POSITION_SKILL_SUGGESTION_MAX);
 
-    const suggestions: PositionSkillSuggestion[] = rawSuggestions
-      .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
-      .map((item) => ({
-        name: typeof item.name === "string" ? item.name.trim().slice(0, 120) : "",
-        description: typeof item.description === "string" ? item.description.trim().slice(0, 500) : "",
-        keywords: Array.isArray(item.keywords)
-          ? item.keywords
-              .filter((keyword): keyword is string => typeof keyword === "string" && keyword.trim().length > 0)
-              .map((keyword) => keyword.trim().slice(0, 80))
-              .slice(0, 30)
-          : [],
-      }))
-      .filter((suggestion) => suggestion.name.length > 0)
-      .slice(0, POSITION_SKILL_SUGGESTION_MAX);
-
-    if (suggestions.length < POSITION_SKILL_SUGGESTION_MIN) {
-      throw new BadRequestException("AI ไม่สามารถแนะนำ skill ได้เพียงพอ กรุณาลองใหม่อีกครั้ง");
+      if (suggestions.length >= POSITION_SKILL_SUGGESTION_MIN) return suggestions;
+      throw new Error("AI returned too few skill suggestions");
+    } catch (error) {
+      this.logger.warn(
+        `AI skill suggestion fallback used position=${position.id} reason=${error instanceof Error ? error.message : String(error)}`,
+      );
+      return this.buildFallbackPositionSkillSuggestions(position.name);
     }
-
-    return suggestions;
   }
 
   async getUserRadar(userId: string, positionId?: string): Promise<UserSkillRadar> {
