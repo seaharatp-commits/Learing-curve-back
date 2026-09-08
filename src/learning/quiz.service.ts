@@ -728,6 +728,20 @@ export class QuizService {
       throw new NotFoundException("ไม่พบบทเรียนนี้");
     }
     await this.ensureCurrentUserExists(user);
+
+    const existingQuiz = await this.prisma.quiz.findFirst({
+      where: {
+        lessonId: lesson.id,
+        createdByUserId: user.id,
+        questions: { some: {} },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, title: true },
+    });
+    if (existingQuiz) {
+      return { quizId: existingQuiz.id, title: existingQuiz.title };
+    }
+
     if (lesson.content.trim().length < MIN_CONTENT_LENGTH) {
       throw new BadRequestException("เนื้อหาบทเรียนนี้สั้นเกินไปสำหรับสร้างแบบทดสอบ");
     }

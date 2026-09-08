@@ -44,7 +44,7 @@ function makeService() {
     user: { findUnique: jest.fn().mockResolvedValue({ id: "user-1" }) },
     knowledgeBaseArticle: { findUnique: jest.fn() },
     lesson: { aggregate: jest.fn(), create: jest.fn(), findUnique: jest.fn() },
-    quiz: { create: jest.fn(), delete: jest.fn(), findMany: jest.fn(), findUnique: jest.fn() },
+    quiz: { create: jest.fn(), delete: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), findUnique: jest.fn() },
     quizAttempt: { create: jest.fn(), findMany: jest.fn() },
   };
   const aiService = { chat: jest.fn() };
@@ -392,6 +392,25 @@ describe("QuizService.askLessonQuestion", () => {
 });
 
 describe("QuizService.generateQuizFromLesson", () => {
+  it("returns the latest existing quiz without calling the AI again", async () => {
+    const { service, prisma, aiService } = makeService();
+    prisma.lesson.findUnique.mockResolvedValue({
+      id: "lesson-1",
+      title: "Lesson 1",
+      content: "This lesson content is long enough to generate a useful assessment for the learner.",
+      createdByUserId: "user-1",
+    });
+    prisma.quiz.findFirst.mockResolvedValue({ id: "quiz-existing", title: "แบบทดสอบ: Lesson 1" });
+
+    await expect(service.generateQuizFromLesson(user, "lesson-1")).resolves.toEqual({
+      quizId: "quiz-existing",
+      title: "แบบทดสอบ: Lesson 1",
+    });
+
+    expect(aiService.chat).not.toHaveBeenCalled();
+    expect(prisma.quiz.create).not.toHaveBeenCalled();
+  });
+
   it("creates a quiz from lesson content and the latest additional prompt", async () => {
     const { service, prisma, aiService } = makeService();
     prisma.lesson.findUnique.mockResolvedValue({
