@@ -200,11 +200,10 @@ export class SkillRadarService {
     const position = await this.prisma.position.findUnique({ where: { id: positionId } });
     if (!position) throw new NotFoundException("ไม่พบตำแหน่งนี้");
 
-    const [preferredUserCount, scoreCount, eventCount, alignmentCount, questionMappingCount] = await Promise.all([
+    const [preferredUserCount, scoreCount, eventCount, questionMappingCount] = await Promise.all([
       this.prisma.user.count({ where: { preferredPositionId: positionId } }),
       this.prisma.userSkillScore.count({ where: { positionId } }),
       this.prisma.skillScoreEvent.count({ where: { positionId } }),
-      this.prisma.careerAlignment.count({ where: { positionId } }),
       this.prisma.quizQuestionSkill.count({ where: { skill: { positionId } } }),
     ]);
 
@@ -212,7 +211,6 @@ export class SkillRadarService {
       [preferredUserCount, "ผู้ใช้"],
       [scoreCount, "คะแนน Skill Radar"],
       [eventCount, "ประวัติคะแนน"],
-      [alignmentCount, "Career Alignment"],
       [questionMappingCount, "คำถาม Quiz"],
     ] as const;
     const usedBy = dependencies

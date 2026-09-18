@@ -190,9 +190,11 @@ describe("SkillRadarService protected position deletion", () => {
     const { service, prisma } = makeService();
     prisma.position.findUnique.mockResolvedValue({ id: "position-1", name: "Temporary", isActive: true });
     prisma.positionSkill.count.mockResolvedValue(6);
+    prisma.careerAlignment.count.mockResolvedValue(1);
 
     await expect(service.removePosition("position-1")).resolves.toEqual({ success: true });
 
+    expect(prisma.careerAlignment.count).not.toHaveBeenCalled();
     expect(prisma.position.delete).toHaveBeenCalledWith({ where: { id: "position-1" } });
   });
 
