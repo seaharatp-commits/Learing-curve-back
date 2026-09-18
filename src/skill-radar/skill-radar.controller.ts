@@ -112,6 +112,12 @@ export class SkillRadarController {
   }
 
   @Roles("ADMIN")
+  @Delete("admin/skills/:id")
+  removeSkill(@Param("id") id: string) {
+    return this.skillRadarService.removeSkill(id);
+  }
+
+  @Roles("ADMIN")
   @Get("questions/:questionId/skill-suggestions")
   suggestQuestionSkills(@Param("questionId") questionId: string) {
     return this.skillRadarService.suggestQuestionSkillMappings(questionId);

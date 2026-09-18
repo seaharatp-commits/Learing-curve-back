@@ -200,20 +200,20 @@ export class SkillRadarService {
     const position = await this.prisma.position.findUnique({ where: { id: positionId } });
     if (!position) throw new NotFoundException("ไม่พบตำแหน่งนี้");
 
-    const [skillCount, preferredUserCount, scoreCount, eventCount, alignmentCount] = await Promise.all([
-      this.prisma.positionSkill.count({ where: { positionId } }),
+    const [preferredUserCount, scoreCount, eventCount, alignmentCount, questionMappingCount] = await Promise.all([
       this.prisma.user.count({ where: { preferredPositionId: positionId } }),
       this.prisma.userSkillScore.count({ where: { positionId } }),
       this.prisma.skillScoreEvent.count({ where: { positionId } }),
       this.prisma.careerAlignment.count({ where: { positionId } }),
+      this.prisma.quizQuestionSkill.count({ where: { skill: { positionId } } }),
     ]);
 
     const dependencies = [
-      [skillCount, "Skill"],
       [preferredUserCount, "ผู้ใช้"],
       [scoreCount, "คะแนน Skill Radar"],
       [eventCount, "ประวัติคะแนน"],
       [alignmentCount, "Career Alignment"],
+      [questionMappingCount, "คำถาม Quiz"],
     ] as const;
     const usedBy = dependencies
       .filter(([count]) => count > 0)
@@ -326,6 +326,35 @@ export class SkillRadarService {
         isActive: dto.isActive ?? skill.isActive,
       },
     });
+  }
+
+  async removeSkill(skillId: string) {
+    const skill = await this.prisma.positionSkill.findUnique({ where: { id: skillId } });
+    if (!skill) throw new NotFoundException("ไม่พบ skill นี้");
+
+    const [scoreCount, eventCount, questionMappingCount] = await Promise.all([
+      this.prisma.userSkillScore.count({ where: { skillId } }),
+      this.prisma.skillScoreEvent.count({ where: { skillId } }),
+      this.prisma.quizQuestionSkill.count({ where: { skillId } }),
+    ]);
+
+    const dependencies = [
+      [scoreCount, "คะแนน Skill Radar"],
+      [eventCount, "ประวัติคะแนน"],
+      [questionMappingCount, "คำถาม Quiz"],
+    ] as const;
+    const usedBy = dependencies
+      .filter(([count]) => count > 0)
+      .map(([count, label]) => `${label} ${count} รายการ`);
+
+    if (usedBy.length > 0) {
+      throw new BadRequestException(
+        `ไม่สามารถลบ Skill นี้ได้ เนื่องจากมีข้อมูลที่เกี่ยวข้อง: ${usedBy.join(", ")}. กรุณาปิดใช้งานแทน`,
+      );
+    }
+
+    await this.prisma.positionSkill.delete({ where: { id: skillId } });
+    return { success: true };
   }
 
   private buildPositionSkillSuggestionPrompt(positionName: string, positionDescription: string | null): string {

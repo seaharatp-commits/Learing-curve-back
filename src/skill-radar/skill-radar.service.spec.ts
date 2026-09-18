@@ -42,6 +42,7 @@ function makeService() {
       }),
       create: jest.fn(),
       update: jest.fn(),
+      delete: jest.fn(),
       count: jest.fn().mockResolvedValue(0),
     },
     skillScoreEvent: {
@@ -62,6 +63,7 @@ function makeService() {
       deleteMany: jest.fn(),
       createMany: jest.fn(),
       findMany: jest.fn(),
+      count: jest.fn().mockResolvedValue(0),
     },
     question: {
       findUnique: jest.fn(),
@@ -184,9 +186,10 @@ describe("SkillRadarService admin skill creation", () => {
 });
 
 describe("SkillRadarService protected position deletion", () => {
-  it("deletes a position only when no records refer to it", async () => {
+  it("deletes a position and its unused skills when no usage records refer to it", async () => {
     const { service, prisma } = makeService();
     prisma.position.findUnique.mockResolvedValue({ id: "position-1", name: "Temporary", isActive: true });
+    prisma.positionSkill.count.mockResolvedValue(6);
 
     await expect(service.removePosition("position-1")).resolves.toEqual({ success: true });
 
@@ -196,7 +199,6 @@ describe("SkillRadarService protected position deletion", () => {
   it("rejects deletion and preserves the position when related records exist", async () => {
     const { service, prisma } = makeService();
     prisma.position.findUnique.mockResolvedValue({ id: "position-1", name: "Software Engineer", isActive: true });
-    prisma.positionSkill.count.mockResolvedValue(6);
     prisma.skillScoreEvent.count.mockResolvedValue(12);
 
     await expect(service.removePosition("position-1")).rejects.toThrow(
@@ -204,6 +206,46 @@ describe("SkillRadarService protected position deletion", () => {
     );
 
     expect(prisma.position.delete).not.toHaveBeenCalled();
+  });
+
+  it("rejects deletion when a skill is mapped to a quiz question", async () => {
+    const { service, prisma } = makeService();
+    prisma.position.findUnique.mockResolvedValue({ id: "position-1", name: "Temporary", isActive: true });
+    prisma.quizQuestionSkill.count.mockResolvedValue(1);
+
+    await expect(service.removePosition("position-1")).rejects.toThrow("คำถาม Quiz 1 รายการ");
+
+    expect(prisma.quizQuestionSkill.count).toHaveBeenCalledWith({
+      where: { skill: { positionId: "position-1" } },
+    });
+    expect(prisma.position.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe("SkillRadarService protected skill deletion", () => {
+  it("deletes a skill only when no records refer to it", async () => {
+    const { service, prisma } = makeService();
+    prisma.positionSkill.findUnique.mockResolvedValue(makeSkill());
+
+    await expect(service.removeSkill("skill-backend")).resolves.toEqual({ success: true });
+
+    expect(prisma.positionSkill.delete).toHaveBeenCalledWith({
+      where: { id: "skill-backend" },
+    });
+  });
+
+  it("rejects deletion and preserves the skill when related records exist", async () => {
+    const { service, prisma } = makeService();
+    prisma.positionSkill.findUnique.mockResolvedValue(makeSkill());
+    prisma.userSkillScore.count.mockResolvedValue(3);
+    prisma.skillScoreEvent.count.mockResolvedValue(8);
+    prisma.quizQuestionSkill.count.mockResolvedValue(2);
+
+    await expect(service.removeSkill("skill-backend")).rejects.toThrow(
+      "ไม่สามารถลบ Skill นี้ได้",
+    );
+
+    expect(prisma.positionSkill.delete).not.toHaveBeenCalled();
   });
 });
 
